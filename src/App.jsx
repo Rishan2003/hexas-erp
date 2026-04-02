@@ -3,12 +3,12 @@ import {
   Calendar, LayoutDashboard, Users, BookOpen, Clock, 
   AlertTriangle, Plus, X, Edit2, Trash2, Check, MapPin, 
   GraduationCap, CalendarDays, BarChart3, DatabaseZap, Map, Settings, Briefcase, ClipboardList,
-  Download, Upload, LogOut, Lock, Mail, Loader2, ChevronLeft, ChevronRight, ShieldAlert
+  Download, Upload, LogOut, Lock, Mail, Loader2, ChevronLeft, ChevronRight, ShieldAlert, Building2
 } from 'lucide-react';
 
 // --- SUPABASE CONFIGURATION ---
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_KEY;
+const supabaseUrl = "https://fmiltvytynakqcxldazr.supabase.co"; 
+const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZtaWx0dnl0eW5ha3FjeGxkYXpyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUwMzQ1MjQsImV4cCI6MjA5MDYxMDUyNH0.bCTIUamLnuXO8xKVutnMztr08jmjWMbuoVaff2sSVwM"; 
 
 const isConfigured = Boolean(supabaseUrl && supabaseKey);
 
@@ -55,13 +55,33 @@ const apiService = {
     return data;
   },
 
-  async fetchAll(supabaseClient) {
-    const [t, c, p, s] = await Promise.all([
-      supabaseClient.from('teachers').select('*'),
-      supabaseClient.from('classrooms').select('*'),
-      supabaseClient.from('programs').select('*'),
-      supabaseClient.from('sessions').select('*')
-    ]);
+  async fetchBranches(supabaseClient) {
+    const { data, error } = await supabaseClient.from('branches').select('*').order('created_at', { ascending: true });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+
+  async createBranch(supabaseClient, branch) {
+    const { data, error } = await supabaseClient.from('branches').insert(branch).select().single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async fetchAll(supabaseClient, branchId) {
+    let tQuery = supabaseClient.from('teachers').select('*');
+    let cQuery = supabaseClient.from('classrooms').select('*');
+    let pQuery = supabaseClient.from('programs').select('*');
+    let sQuery = supabaseClient.from('sessions').select('*');
+
+    // Dynamically filter by branch if an ID is provided (Super Admins can pass null/undefined to see all)
+    if (branchId) {
+      tQuery = tQuery.eq('branch_id', branchId);
+      cQuery = cQuery.eq('branch_id', branchId);
+      pQuery = pQuery.eq('branch_id', branchId);
+      sQuery = sQuery.eq('branch_id', branchId);
+    }
+
+    const [t, c, p, s] = await Promise.all([tQuery, cQuery, pQuery, sQuery]);
     if (t.error) throw new Error(t.error.message);
     if (c.error) throw new Error(c.error.message);
     if (p.error) throw new Error(p.error.message);
@@ -70,13 +90,12 @@ const apiService = {
   },
 
   async createProgram(supabaseClient, program, sessions) {
-    // Remove local ID if it exists so Supabase generates a UUID
     const { id, ...programPayload } = program; 
     const { data: pData, error: pError } = await supabaseClient.from('programs').insert(programPayload).select().single();
     if (pError) throw new Error(pError.message);
     
     const sessionsWithProgId = sessions.map(s => {
-      const { id: sId, ...sPayload } = s; // Remove preview ID
+      const { id: sId, ...sPayload } = s; 
       return { ...sPayload, program_id: pData.id, branch_id: program.branch_id };
     });
     const { data: sData, error: sError } = await supabaseClient.from('sessions').insert(sessionsWithProgId).select();
@@ -91,7 +110,6 @@ const apiService = {
     await supabaseClient.from('sessions').delete().eq('program_id', program.id);
     
     const sessionsWithProgId = sessions.map(s => {
-      // If it's a completely new session from preview, it might have a fake ID or no ID
       const { id: sId, ...sPayload } = s; 
       return { ...sPayload, program_id: program.id, branch_id: program.branch_id };
     });
@@ -169,6 +187,7 @@ const StoreProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [data, setData] = useState({ teachers: [], classrooms: [], programs: [], sessions: [] });
+  const [branches, setBranches] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [globalError, setGlobalError] = useState(null);
   const [libLoaded, setLibLoaded] = useState(false);
@@ -198,11 +217,14 @@ const StoreProvider = ({ children }) => {
     document.head.appendChild(script);
   }, []);
 
-  const refreshData = useCallback(async () => {
+  const refreshData = useCallback(async (activeBranchId) => {
     if (!supabaseClient) return;
     try {
-      const fetched = await apiService.fetchAll(supabaseClient);
+      const fetched = await apiService.fetchAll(supabaseClient, activeBranchId);
       setData(fetched);
+      
+      const fetchedBranches = await apiService.fetchBranches(supabaseClient);
+      setBranches(fetchedBranches);
     } catch (err) {
       console.error("Data fetch error:", err);
       setGlobalError(err.message || "Failed to load branch data.");
@@ -231,7 +253,7 @@ const StoreProvider = ({ children }) => {
         try {
           const userProfile = await apiService.fetchProfile(supabaseClient, currentUser.id);
           setProfile(userProfile);
-          await refreshData();
+          await refreshData(userProfile.branch_id);
         } catch (err) {
           console.error("Profile fetch error:", err);
           setGlobalError(err.message || "Failed to load user profile.");
@@ -239,6 +261,7 @@ const StoreProvider = ({ children }) => {
       } else {
         setProfile(null);
         setData({ teachers: [], classrooms: [], programs: [], sessions: [] });
+        setBranches([]);
       }
       setIsLoading(false);
     };
@@ -252,6 +275,32 @@ const StoreProvider = ({ children }) => {
 
     return () => { subscription?.unsubscribe(); };
   }, [supabaseClient, refreshData]);
+
+  // Expose function to instantly switch the active branch data for Super Admins
+  const switchBranch = async (branchId) => {
+    if (profile?.role !== 'super_admin') return;
+    const newProfile = { ...profile, branch_id: branchId || null };
+    setProfile(newProfile);
+    await refreshData(newProfile.branch_id);
+  };
+
+  // Profile-based link assignment
+  const assignManagerToBranch = async (email, branchId) => {
+    try {
+      const { data, error } = await supabaseClient
+        .from('profiles')
+        .update({ branch_id: branchId })
+        .eq('email', email)
+        .select();
+      if (error) throw new Error(error.message);
+      if (!data || data.length === 0) {
+         throw new Error("User not found. Ensure they are added in the Supabase Auth Dashboard first.");
+      }
+      alert(`Successfully linked ${email} to the selected branch.`);
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
   const { teachers, classrooms, programs, sessions } = data;
 
@@ -307,7 +356,7 @@ const StoreProvider = ({ children }) => {
                             program.type === 'club' ? 'club_session' : program.type;
 
         generated.push(withBranch({
-          id: generateId(), // Only for local UI mapping during preview
+          id: generateId(), 
           title: `${program.name}`,
           type: sessionType,
           assigned_teachers: program.assigned_teachers || [],
@@ -323,62 +372,66 @@ const StoreProvider = ({ children }) => {
   };
 
   const saveProgram = async (program, generatedSessions) => {
-    try { await apiService.createProgram(supabaseClient, withBranch(program), generatedSessions); await refreshData(); }
+    try { await apiService.createProgram(supabaseClient, withBranch(program), generatedSessions); await refreshData(profile?.branch_id); }
     catch(err) { alert(err.message); }
   };
   const updateProgram = async (program, generatedSessions) => {
-    try { await apiService.updateProgram(supabaseClient, withBranch(program), generatedSessions); await refreshData(); }
+    try { await apiService.updateProgram(supabaseClient, withBranch(program), generatedSessions); await refreshData(profile?.branch_id); }
     catch(err) { alert(err.message); }
   };
   const deleteProgram = async (id) => {
-    try { await apiService.deleteProgram(supabaseClient, id); await refreshData(); }
+    try { await apiService.deleteProgram(supabaseClient, id); await refreshData(profile?.branch_id); }
     catch(err) { alert(err.message); }
   };
   const addSession = async (session) => {
-    try { await apiService.createSession(supabaseClient, withBranch(session)); await refreshData(); }
+    try { await apiService.createSession(supabaseClient, withBranch(session)); await refreshData(profile?.branch_id); }
     catch(err) { alert(err.message); }
   };
   const updateSession = async (session) => {
-    try { await apiService.updateSession(supabaseClient, session); await refreshData(); }
+    try { await apiService.updateSession(supabaseClient, session); await refreshData(profile?.branch_id); }
     catch(err) { alert(err.message); }
   };
   const deleteSession = async (id) => {
-    try { await apiService.deleteSession(supabaseClient, id); await refreshData(); }
+    try { await apiService.deleteSession(supabaseClient, id); await refreshData(profile?.branch_id); }
     catch(err) { alert(err.message); }
   };
   const addTeacher = async (teacher) => {
-    try { await apiService.createTeacher(supabaseClient, withBranch(teacher)); await refreshData(); }
+    try { await apiService.createTeacher(supabaseClient, withBranch(teacher)); await refreshData(profile?.branch_id); }
     catch(err) { alert(err.message); }
   };
   const updateTeacher = async (teacher) => {
-    try { await apiService.updateTeacher(supabaseClient, teacher); await refreshData(); }
+    try { await apiService.updateTeacher(supabaseClient, teacher); await refreshData(profile?.branch_id); }
     catch(err) { alert(err.message); }
   };
   const deleteTeacher = async (id) => {
-    try { await apiService.deleteTeacher(supabaseClient, id); await refreshData(); }
+    try { await apiService.deleteTeacher(supabaseClient, id); await refreshData(profile?.branch_id); }
     catch(err) { alert(err.message); }
   };
   const addClassroom = async (classroom) => {
-    try { await apiService.createClassroom(supabaseClient, withBranch(classroom)); await refreshData(); }
+    try { await apiService.createClassroom(supabaseClient, withBranch(classroom)); await refreshData(profile?.branch_id); }
     catch(err) { alert(err.message); }
   };
   const updateClassroom = async (classroom) => {
-    try { await apiService.updateClassroom(supabaseClient, classroom); await refreshData(); }
+    try { await apiService.updateClassroom(supabaseClient, classroom); await refreshData(profile?.branch_id); }
     catch(err) { alert(err.message); }
   };
   const deleteClassroom = async (id) => {
-    try { await apiService.deleteClassroom(supabaseClient, id); await refreshData(); }
+    try { await apiService.deleteClassroom(supabaseClient, id); await refreshData(profile?.branch_id); }
     catch(err) { alert(err.message); }
   };
+  const addBranch = async (branch) => {
+    try { await apiService.createBranch(supabaseClient, branch); await refreshData(profile?.branch_id); }
+    catch(err) { alert(err.message); }
+  }
   const signOut = async () => { if(supabaseClient) await supabaseClient.auth.signOut(); };
 
   if (!isConfigured) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
-        <div className="bg-white p-10 rounded-[2.5rem] shadow-xl border border-slate-200 max-w-lg w-full">
-          <div className="bg-red-50 p-5 rounded-full w-fit mx-auto mb-6"><ShieldAlert className="text-red-500" size={48} /></div>
-          <h2 className="text-3xl font-black text-slate-800 mb-4 tracking-tight">Setup Required</h2>
-          <p className="text-slate-500 font-medium mb-8 leading-relaxed">The application is missing Supabase credentials.</p>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-6 text-center">
+        <div className="bg-white p-8 rounded-xl shadow-lg border border-gray-200 max-w-lg w-full">
+          <div className="bg-red-50 p-4 rounded-full w-fit mx-auto mb-4"><ShieldAlert className="text-red-500" size={32} /></div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Setup Required</h2>
+          <p className="text-gray-500 font-medium mb-6">The application is missing Supabase credentials.</p>
         </div>
       </div>
     );
@@ -386,11 +439,11 @@ const StoreProvider = ({ children }) => {
 
   if (!libLoaded || isLoading) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 space-y-4">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 space-y-4">
         {globalError ? (
-          <><AlertTriangle className="text-red-600" size={48} /><div className="text-red-600 font-bold text-lg tracking-wide">{globalError}</div></>
+          <><AlertTriangle className="text-red-600" size={48} /><div className="text-red-600 font-medium text-lg tracking-wide">{globalError}</div></>
         ) : (
-          <><Loader2 className="text-blue-600 animate-spin" size={48} /><div className="text-slate-600 font-black text-lg tracking-wide uppercase">Initializing Cloud Services...</div></>
+          <><Loader2 className="text-blue-600 animate-spin" size={48} /><div className="text-gray-600 font-medium text-lg tracking-wide">Connecting to System...</div></>
         )}
       </div>
     );
@@ -398,11 +451,12 @@ const StoreProvider = ({ children }) => {
 
   return (
     <StoreContext.Provider value={{
-      supabaseClient, user, profile, teachers, classrooms, programs, sessions, globalError,
+      supabaseClient, user, profile, teachers, classrooms, programs, sessions, branches, globalError,
       saveProgram, updateProgram, deleteProgram, generateProgramSessions,
       addSession, updateSession, deleteSession,
       addTeacher, updateTeacher, deleteTeacher,
       addClassroom, updateClassroom, deleteClassroom,
+      addBranch, switchBranch, assignManagerToBranch,
       findConflicts, signOut
     }}>
       {children}
@@ -413,19 +467,19 @@ const StoreProvider = ({ children }) => {
 // --- SHARED UI COMPONENTS ---
 const Badge = ({ children, color = 'blue' }) => {
   const colors = {
-    blue: 'bg-blue-50 text-blue-700 border-blue-100',
-    purple: 'bg-purple-50 text-purple-700 border-purple-100',
-    red: 'bg-red-50 text-red-700 border-red-100',
-    orange: 'bg-orange-50 text-orange-700 border-orange-100',
-    green: 'bg-green-50 text-green-700 border-green-100',
-    gray: 'bg-gray-50 text-gray-700 border-gray-100',
-    indigo: 'bg-indigo-50 text-indigo-700 border-indigo-100',
-    teal: 'bg-teal-50 text-teal-700 border-teal-100',
-    cyan: 'bg-cyan-50 text-cyan-700 border-cyan-100',
-    amber: 'bg-amber-50 text-amber-700 border-amber-100',
+    blue: 'bg-blue-100 text-blue-800 border-blue-200',
+    purple: 'bg-purple-100 text-purple-800 border-purple-200',
+    red: 'bg-red-100 text-red-800 border-red-200',
+    orange: 'bg-orange-100 text-orange-800 border-orange-200',
+    green: 'bg-green-100 text-green-800 border-green-200',
+    gray: 'bg-gray-100 text-gray-800 border-gray-200',
+    indigo: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+    teal: 'bg-teal-100 text-teal-800 border-teal-200',
+    cyan: 'bg-cyan-100 text-cyan-800 border-cyan-200',
+    amber: 'bg-amber-100 text-amber-800 border-amber-200',
   };
   return (
-    <span className={`px-2 py-0.5 rounded-md text-xs font-bold border ${colors[color] || colors.gray}`}>
+    <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${colors[color] || colors.gray}`}>
       {children}
     </span>
   );
@@ -445,10 +499,10 @@ const Modal = ({ isOpen, onClose, title, children }) => {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto flex flex-col">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto flex flex-col">
         <div className="flex justify-between items-center p-6 border-b sticky top-0 bg-white z-10 shrink-0">
-          <h2 className="text-xl font-bold text-slate-800">{title}</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-full hover:bg-slate-100 transition-colors">
+          <h2 className="text-xl font-semibold text-gray-800">{title}</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-700 p-1 rounded-full hover:bg-gray-100">
             <X size={20} />
           </button>
         </div>
@@ -476,33 +530,33 @@ const LoginView = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-      <div className="max-w-md w-full space-y-8 bg-white p-10 rounded-3xl shadow-2xl border border-slate-200">
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="max-w-md w-full space-y-8 bg-white p-10 rounded-xl shadow-sm border border-gray-100">
         <div className="text-center">
-          <div className="mx-auto h-20 w-20 bg-blue-600 rounded-3xl flex items-center justify-center shadow-xl shadow-blue-100">
-            <GraduationCap className="text-white" size={44} />
+          <div className="mx-auto h-16 w-16 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center">
+            <GraduationCap size={36} />
           </div>
-          <h2 className="mt-8 text-3xl font-black text-slate-900 tracking-tight">HEXA'S ERP</h2>
-          <p className="mt-2 text-sm text-slate-500 font-bold uppercase tracking-widest">Branch Access Portal</p>
+          <h2 className="mt-6 text-3xl font-extrabold text-gray-900 tracking-tight">HEXA'S ERP</h2>
+          <p className="mt-2 text-sm text-gray-500 font-medium">Invite-Only Access</p>
         </div>
-        <form className="mt-10 space-y-6" onSubmit={handleLogin}>
+        <form className="mt-8 space-y-6" onSubmit={handleLogin}>
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-600 px-5 py-4 rounded-2xl text-sm font-bold flex items-center gap-3">
-              <AlertTriangle size={20} className="shrink-0" /><span>{error}</span>
+            <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-lg text-sm font-medium flex items-center gap-2">
+              <AlertTriangle size={18} className="shrink-0" /><span>{error}</span>
             </div>
           )}
           <div className="space-y-4">
             <div className="relative">
-              <Mail className="absolute left-4 top-4 text-slate-400" size={20} />
-              <input required type="email" placeholder="Work Email" className="block w-full pl-12 pr-4 py-4 border border-slate-200 rounded-2xl leading-5 bg-slate-50 focus:outline-none focus:ring-4 focus:ring-blue-100 focus:bg-white focus:border-blue-500 transition-all font-medium" value={email} onChange={(e) => setEmail(e.target.value)} />
+              <Mail className="absolute left-3 top-3 text-gray-400" size={20} />
+              <input required type="email" placeholder="Work Email" className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg bg-gray-50 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white sm:text-sm" value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
             <div className="relative">
-              <Lock className="absolute left-4 top-4 text-slate-400" size={20} />
-              <input required type="password" placeholder="Branch Password" className="block w-full pl-12 pr-4 py-4 border border-slate-200 rounded-2xl leading-5 bg-slate-50 focus:outline-none focus:ring-4 focus:ring-blue-100 focus:bg-white focus:border-blue-500 transition-all font-medium" value={password} onChange={(e) => setPassword(e.target.value)} />
+              <Lock className="absolute left-3 top-3 text-gray-400" size={20} />
+              <input required type="password" placeholder="Branch Password" className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg bg-gray-50 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:bg-white sm:text-sm" value={password} onChange={(e) => setPassword(e.target.value)} />
             </div>
           </div>
-          <button type="submit" disabled={loading} className="group relative w-full flex justify-center py-4 px-4 border border-transparent text-sm font-black rounded-2xl text-white bg-blue-600 hover:bg-blue-700 hover:shadow-lg focus:outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed">
-            {loading ? <Loader2 className="animate-spin" size={20} /> : "AUTHENTICATE & ENTER"}
+          <button type="submit" disabled={loading} className="group relative w-full flex justify-center py-2.5 px-4 border border-transparent text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 focus:outline-none transition-colors disabled:opacity-50">
+            {loading ? <Loader2 className="animate-spin" size={18} /> : "Sign in"}
           </button>
         </form>
       </div>
@@ -511,6 +565,144 @@ const LoginView = () => {
 };
 
 // --- VIEWS ---
+
+const SuperAdminDashboard = () => {
+  const { branches, addBranch, assignManagerToBranch } = useContext(StoreContext);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [formData, setFormData] = useState({ name: '', location: '' });
+  const [isSaving, setIsSaving] = useState(false);
+  
+  const [managerForm, setManagerForm] = useState({ email: '', password: '', branch_id: '' });
+
+  const handleAddBranchSubmit = async (e) => {
+    e.preventDefault();
+    setIsSaving(true);
+    await addBranch(formData);
+    setIsSaving(false);
+    setIsModalOpen(false);
+    setFormData({ name: '', location: '' });
+  };
+
+  const handleAssignManagerSubmit = async (e) => {
+    e.preventDefault();
+    await assignManagerToBranch(managerForm.email, managerForm.branch_id);
+    setManagerForm({ email: '', password: '', branch_id: '' });
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Global Administration</h1>
+          <p className="text-gray-500 mt-1">Manage global infrastructure and branch tenants.</p>
+        </div>
+        <button onClick={() => setIsModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors">
+          <Plus size={20} /> Add Branch
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center gap-4">
+          <div className="p-3 bg-blue-100 text-blue-600 rounded-lg"><Building2 size={24} /></div>
+          <div>
+            <p className="text-sm font-medium text-gray-500">Active Branches</p>
+            <h3 className="text-2xl font-bold text-gray-900">{branches.length}</h3>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="p-4 border-b border-gray-100 bg-gray-50">
+          <h2 className="text-lg font-semibold text-gray-800">Assign Branch Manager</h2>
+        </div>
+        <div className="p-6">
+          <div className="bg-blue-50 text-blue-800 p-4 rounded-lg mb-6 text-sm flex items-start gap-3">
+            <AlertTriangle size={20} className="shrink-0 mt-0.5" />
+            <div>
+              <strong className="block mb-1">To create a manager securely:</strong>
+              <ol className="list-decimal ml-4 space-y-1">
+                <li>Add them in the Supabase Auth Dashboard.</li>
+                <li>Use this form to link their email to a specific Branch.</li>
+              </ol>
+            </div>
+          </div>
+          
+          <form onSubmit={handleAssignManagerSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Manager Email</label>
+              <input required type="email" value={managerForm.email} onChange={e => setManagerForm({...managerForm, email: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm" placeholder="manager@branch.com" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Password</label>
+              <input type="password" value={managerForm.password} onChange={e => setManagerForm({...managerForm, password: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-gray-50 text-sm" placeholder="Set in Supabase Auth" disabled title="Password must be set via Supabase Dashboard" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Assign to Branch</label>
+              <select required value={managerForm.branch_id} onChange={e => setManagerForm({...managerForm, branch_id: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm">
+                <option value="">Select Branch...</option>
+                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <button type="submit" className="w-full px-4 py-2 bg-gray-900 text-white font-medium rounded-lg hover:bg-gray-800 transition-colors text-sm">
+                Link Manager
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="p-4 border-b border-gray-100 bg-gray-50">
+          <h2 className="text-lg font-semibold text-gray-800">Branch Directory</h2>
+        </div>
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className="border-b border-gray-100 text-xs uppercase text-gray-500 font-semibold">
+              <th className="p-4">Branch ID</th>
+              <th className="p-4">Name</th>
+              <th className="p-4">Location</th>
+              <th className="p-4">Date Added</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {branches.map(branch => (
+              <tr key={branch.id} className="hover:bg-gray-50 transition-colors">
+                <td className="p-4 text-xs font-mono text-gray-400">{branch.id}</td>
+                <td className="p-4 font-semibold text-gray-900">{branch.name}</td>
+                <td className="p-4 text-sm text-gray-600">{branch.location || 'N/A'}</td>
+                <td className="p-4 text-sm text-gray-600">
+                  {new Date(branch.created_at).toLocaleDateString()}
+                </td>
+              </tr>
+            ))}
+            {branches.length === 0 && (
+              <tr><td colSpan="4" className="p-8 text-center text-gray-500">No branches configured.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title="Register New Branch">
+        <form onSubmit={handleAddBranchSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Branch Name</label>
+            <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., Downtown Campus" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Location</label>
+            <input required type="text" value={formData.location} onChange={e => setFormData({...formData, location: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., 123 Main St, Sector 4" />
+          </div>
+          <div className="pt-4 flex justify-end gap-3 border-t">
+            <button type="button" onClick={() => setIsModalOpen(false)} disabled={isSaving} className="px-4 py-2 text-gray-700 font-medium hover:bg-gray-100 rounded-lg disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={isSaving} className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50">{isSaving ? 'Registering...' : 'Add Branch'}</button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+};
+
 const DashboardView = () => {
   const { sessions, teachers } = useContext(StoreContext);
   const todaysSessions = useMemo(() => {
@@ -521,55 +713,43 @@ const DashboardView = () => {
   }, [sessions]);
 
   return (
-    <div className="space-y-8">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
-          <div className="flex items-center gap-6">
-            <div className="p-4 bg-blue-50 text-blue-600 rounded-2xl"><CalendarDays size={32} /></div>
+    <div className="space-y-6">
+      <h1 className="text-2xl font-bold text-gray-900">Institute Dashboard</h1>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+          <div className="flex items-center gap-4">
+            <div className="p-3 bg-blue-100 text-blue-600 rounded-lg"><CalendarDays size={24} /></div>
             <div>
-              <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">Today's Load</p>
-              <h3 className="text-4xl font-black text-slate-900">{todaysSessions.length} <span className="text-lg text-slate-400 font-bold">Sessions</span></h3>
+              <p className="text-sm font-medium text-gray-500">Today's Sessions</p>
+              <h3 className="text-2xl font-bold text-gray-900">{todaysSessions.length}</h3>
             </div>
           </div>
         </div>
-        <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
-          <div className="flex items-center gap-6">
-            <div className="p-4 bg-purple-50 text-purple-600 rounded-2xl"><Users size={32} /></div>
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+          <div className="flex items-center gap-4">
+            <div className="p-3 bg-purple-100 text-purple-600 rounded-lg"><Users size={24} /></div>
             <div>
-              <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">Personnel</p>
-              <h3 className="text-4xl font-black text-slate-900">{(teachers || []).length} <span className="text-lg text-slate-400 font-bold">Experts</span></h3>
+              <p className="text-sm font-medium text-gray-500">Active Teachers</p>
+              <h3 className="text-2xl font-bold text-gray-900">{(teachers || []).length}</h3>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-          <h2 className="text-xl font-black text-slate-800">Operational Timeline</h2>
-          <Badge color="blue">LIVE UPDATES</Badge>
-        </div>
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="p-6 border-b border-gray-100"><h2 className="text-lg font-semibold text-gray-800">Today's Schedule</h2></div>
         <div className="p-0">
           {todaysSessions.length === 0 ? (
-            <div className="p-20 text-center flex flex-col items-center">
-              <div className="bg-slate-50 p-6 rounded-full mb-4"><Clock className="text-slate-300" size={48} /></div>
-              <p className="text-slate-400 font-bold italic">The timeline is clear for today.</p>
-            </div>
+            <p className="p-6 text-gray-500 text-center">No sessions scheduled for today.</p>
           ) : (
-            <ul className="divide-y divide-slate-100">
+            <ul className="divide-y divide-gray-100">
               {todaysSessions.map(session => (
-                <li key={session.id} className="p-6 hover:bg-slate-50/80 transition-colors flex items-center justify-between">
-                  <div className="flex items-center gap-6">
-                    <div className="text-center min-w-[70px]">
-                      <p className="text-xs font-black text-slate-400 uppercase tracking-tighter">Starts</p>
-                      <p className="text-sm font-black text-blue-600">{formatTime(session.start_time).split(' ')[0]}</p>
-                    </div>
-                    <div className="w-1 h-12 bg-slate-200 rounded-full"></div>
-                    <div>
-                      <h4 className="font-black text-slate-800 text-lg leading-tight">{session.title}</h4>
-                      <p className="text-xs font-bold text-slate-500 mt-1 flex items-center gap-2">
-                        <MapPin size={12} className="text-slate-300" /> ROOM {session.assigned_classroom?.substring(0,4).toUpperCase() || 'TBA'}
-                      </p>
-                    </div>
+                <li key={session.id} className="p-4 hover:bg-gray-50 transition-colors flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium text-gray-900">{session.title}</h4>
+                    <p className="text-sm text-gray-500 mt-1 flex items-center gap-2">
+                      <Clock size={14} /> {formatTime(session.start_time)} - {formatTime(session.end_time)}
+                    </p>
                   </div>
                   <Badge color={getSessionColor(session.type)}>{(session.type || '').replace(/_/g, ' ').toUpperCase()}</Badge>
                 </li>
@@ -606,67 +786,65 @@ const CalendarView = () => {
 
   const getTypeColor = (type) => {
     switch (type) {
-      case 'batch_session': return 'bg-blue-50 border-blue-200 text-blue-800';
-      case 'club_session': return 'bg-purple-50 border-purple-200 text-purple-800';
-      case 'test': case 'mock_test': return 'bg-indigo-50 border-indigo-200 text-indigo-800';
-      case 'partial_reading': return 'bg-teal-50 border-teal-200 text-teal-800';
-      case 'partial_writing': return 'bg-cyan-50 border-cyan-200 text-cyan-800';
-      case 'partial_speaking': return 'bg-amber-50 border-amber-200 text-amber-800';
-      default: return 'bg-orange-50 border-orange-200 text-orange-800';
+      case 'batch_session': return 'bg-blue-100 border-blue-300 text-blue-800';
+      case 'club_session': return 'bg-purple-100 border-purple-300 text-purple-800';
+      case 'test': case 'mock_test': return 'bg-indigo-100 border-indigo-300 text-indigo-800';
+      case 'partial_reading': return 'bg-teal-100 border-teal-300 text-teal-800';
+      case 'partial_writing': return 'bg-cyan-100 border-cyan-300 text-cyan-800';
+      case 'partial_speaking': return 'bg-amber-100 border-amber-300 text-amber-800';
+      default: return 'bg-orange-100 border-orange-300 text-orange-800';
     }
   };
 
   return (
-    <div className="h-[700px] flex flex-col bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
-      <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-        <h2 className="text-xl font-black text-slate-800 flex items-center gap-3">
-          <CalendarDays size={24} className="text-blue-600" />
+    <div className="h-full flex flex-col bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+        <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+          <CalendarDays size={20} className="text-blue-600" />
           {weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - {weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
         </h2>
-        <div className="flex gap-3 items-center">
-          <select value={selectedClassroom} onChange={(e) => setSelectedClassroom(e.target.value)} className="px-4 py-2 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-100">
+        <div className="flex gap-2 items-center">
+          <select value={selectedClassroom} onChange={(e) => setSelectedClassroom(e.target.value)} className="px-2 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500">
             <option value="">All Rooms</option>
             {classrooms.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <div className="flex bg-white rounded-xl border border-slate-200 p-1 shadow-sm">
-            <button onClick={handlePrevWeek} className="px-4 py-2 hover:bg-slate-50 text-sm font-bold text-slate-600 rounded-lg transition-colors"><ChevronLeft size={16}/></button>
-            <button onClick={() => setCurrentWeek(new Date())} className="px-4 py-2 hover:bg-slate-50 text-sm font-bold text-slate-600 rounded-lg transition-colors">Today</button>
-            <button onClick={handleNextWeek} className="px-4 py-2 hover:bg-slate-50 text-sm font-bold text-slate-600 rounded-lg transition-colors"><ChevronRight size={16}/></button>
-          </div>
+          <button onClick={handlePrevWeek} className="px-3 py-1.5 bg-white border rounded-md hover:bg-gray-50 text-sm font-medium">Prev Week</button>
+          <button onClick={() => setCurrentWeek(new Date())} className="px-3 py-1.5 bg-white border rounded-md hover:bg-gray-50 text-sm font-medium">Today</button>
+          <button onClick={handleNextWeek} className="px-3 py-1.5 bg-white border rounded-md hover:bg-gray-50 text-sm font-medium">Next Week</button>
         </div>
       </div>
 
       <div className="flex-1 overflow-auto flex">
-        <div className="w-20 flex-shrink-0 border-r border-slate-100 bg-white relative">
-          <div className="h-12 border-b border-slate-100 bg-slate-50/50 sticky top-0 z-20"></div>
+        <div className="w-16 flex-shrink-0 border-r bg-white relative">
+          <div className="h-10 border-b bg-gray-50 sticky top-0 z-20"></div>
           {hours.map(hour => (
-            <div key={hour} className="h-20 border-b border-slate-50 text-xs text-slate-400 text-right pr-3 pt-2 font-bold uppercase tracking-wider">
+            <div key={hour} className="h-16 border-b text-xs text-gray-400 text-right pr-2 pt-1 font-medium">
               {hour > 12 ? `${hour - 12} PM` : hour === 12 ? '12 PM' : `${hour} AM`}
             </div>
           ))}
         </div>
         <div className="flex-1 grid grid-cols-7 min-w-[800px] relative">
           {weekDays.map((day, i) => (
-            <div key={i} className="border-r border-slate-100 relative">
-              <div className="h-12 border-b border-slate-100 flex flex-col items-center justify-center bg-slate-50/50 sticky top-0 z-10">
-                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">{day.toLocaleDateString('en-US', { weekday: 'short' })}</span>
-                <span className={`text-sm font-black mt-1 ${day.toDateString() === new Date().toDateString() ? 'text-blue-600' : 'text-slate-800'}`}>{day.getDate()}</span>
+            <div key={i} className="border-r relative">
+              <div className="h-10 border-b flex flex-col items-center justify-center bg-gray-50 sticky top-0 z-10">
+                <span className="text-xs font-semibold text-gray-500 uppercase">{day.toLocaleDateString('en-US', { weekday: 'short' })}</span>
+                <span className={`text-sm font-bold ${day.toDateString() === new Date().toDateString() ? 'text-blue-600' : 'text-gray-900'}`}>{day.getDate()}</span>
               </div>
-              <div className="relative" style={{ height: `${hours.length * 5}rem` }}>
-                {hours.map(hour => <div key={hour} className={`h-20 border-b border-slate-50 ${selectedClassroom ? 'hover:bg-green-50/30 cursor-pointer transition-colors' : ''}`}></div>)}
+              <div className="relative" style={{ height: `${hours.length * 4}rem` }}>
+                {hours.map(hour => <div key={hour} className={`h-16 border-b border-gray-100 ${selectedClassroom ? 'hover:bg-green-50 cursor-pointer transition-colors' : ''}`}></div>)}
                 {weekSessions.filter(s => new Date(s.start_time).toDateString() === day.toDateString()).map(session => {
                   const start = new Date(session.start_time);
                   const end = new Date(session.end_time);
                   const startMinutesFrom8 = (start.getHours() - 8) * 60 + start.getMinutes();
                   const durationMinutes = (end - start) / (1000 * 60);
-                  const topPos = (startMinutesFrom8 / 60) * 5; 
-                  const heightPos = (durationMinutes / 60) * 5; 
+                  const topPos = (startMinutesFrom8 / 60) * 4; 
+                  const heightPos = (durationMinutes / 60) * 4; 
                   const roomName = classrooms.find(c => c.id === session.assigned_classroom)?.name || 'TBA';
                   return (
-                    <div key={session.id} className={`absolute left-1 right-1 rounded-xl border p-2 shadow-sm overflow-hidden text-xs transition-all hover:z-20 hover:shadow-md ${getTypeColor(session.type)}`} style={{ top: `${topPos}rem`, height: `${heightPos}rem`, zIndex: 10 }} title={`${session.title}\n${formatTime(start)} - ${formatTime(end)}`}>
-                      <div className="font-bold truncate text-slate-900">{session.title}</div>
-                      <div className="font-semibold opacity-70 mt-0.5 truncate">{formatTime(start)} - {formatTime(end)}</div>
-                      {heightPos >= 3 && <div className="mt-1 font-bold opacity-60 truncate flex items-center gap-1"><MapPin size={10}/>{roomName}</div>}
+                    <div key={session.id} className={`absolute left-1 right-1 rounded-md border p-1.5 shadow-sm overflow-hidden text-xs leading-tight transition-all hover:z-20 hover:shadow-md ${getTypeColor(session.type)}`} style={{ top: `${topPos}rem`, height: `${heightPos}rem`, zIndex: 10 }} title={`${session.title}\n${formatTime(start)} - ${formatTime(end)}`}>
+                      <div className="font-semibold truncate">{session.title}</div>
+                      <div className="opacity-80 mt-0.5 truncate">{formatTime(start)} - {formatTime(end)}</div>
+                      {heightPos >= 3 && <div className="mt-1 opacity-75 truncate flex items-center gap-1"><MapPin size={10}/>{roomName}</div>}
                     </div>
                   );
                 })}
@@ -698,64 +876,62 @@ const DailyRoomView = () => {
 
   const getTypeColor = (type) => {
     switch (type) {
-      case 'batch_session': return 'bg-blue-50 border-blue-200 text-blue-800';
-      case 'club_session': return 'bg-purple-50 border-purple-200 text-purple-800';
-      case 'test': case 'mock_test': return 'bg-indigo-50 border-indigo-200 text-indigo-800';
-      case 'partial_reading': return 'bg-teal-50 border-teal-200 text-teal-800';
-      case 'partial_writing': return 'bg-cyan-50 border-cyan-200 text-cyan-800';
-      case 'partial_speaking': return 'bg-amber-50 border-amber-200 text-amber-800';
-      default: return 'bg-orange-50 border-orange-200 text-orange-800';
+      case 'batch_session': return 'bg-blue-100 border-blue-300 text-blue-800';
+      case 'club_session': return 'bg-purple-100 border-purple-300 text-purple-800';
+      case 'test': case 'mock_test': return 'bg-indigo-100 border-indigo-300 text-indigo-800';
+      case 'partial_reading': return 'bg-teal-100 border-teal-300 text-teal-800';
+      case 'partial_writing': return 'bg-cyan-100 border-cyan-300 text-cyan-800';
+      case 'partial_speaking': return 'bg-amber-100 border-amber-300 text-amber-800';
+      default: return 'bg-orange-100 border-orange-300 text-orange-800';
     }
   };
 
   return (
-    <div className="h-[700px] flex flex-col bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
-      <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-        <h2 className="text-xl font-black text-slate-800 flex items-center gap-3">
-          <Map size={24} className="text-blue-600" />
+    <div className="h-full flex flex-col bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="p-4 border-b flex justify-between items-center bg-gray-50">
+        <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+          <Map size={20} className="text-blue-600" />
           {currentDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
         </h2>
-        <div className="flex gap-3 items-center">
-          <input type="date" value={[currentDate.getFullYear(), String(currentDate.getMonth() + 1).padStart(2, '0'), String(currentDate.getDate()).padStart(2, '0')].join('-')} onChange={(e) => { if (e.target.value) { const [y, m, d] = e.target.value.split('-'); setCurrentDate(new Date(y, m - 1, d)); } }} className="px-4 py-2 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100 shadow-sm" />
-          <div className="flex bg-white rounded-xl border border-slate-200 p-1 shadow-sm">
-            <button onClick={handlePrevDay} className="px-4 py-2 hover:bg-slate-50 text-sm font-bold text-slate-600 rounded-lg transition-colors"><ChevronLeft size={16}/></button>
-            <button onClick={() => setCurrentDate(new Date())} className="px-4 py-2 hover:bg-slate-50 text-sm font-bold text-slate-600 rounded-lg transition-colors">Today</button>
-            <button onClick={handleNextDay} className="px-4 py-2 hover:bg-slate-50 text-sm font-bold text-slate-600 rounded-lg transition-colors"><ChevronRight size={16}/></button>
-          </div>
+        <div className="flex gap-2 items-center">
+          <input type="date" value={[currentDate.getFullYear(), String(currentDate.getMonth() + 1).padStart(2, '0'), String(currentDate.getDate()).padStart(2, '0')].join('-')} onChange={(e) => { if (e.target.value) { const [y, m, d] = e.target.value.split('-'); setCurrentDate(new Date(y, m - 1, d)); } }} className="px-2 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+          <button onClick={handlePrevDay} className="px-3 py-1.5 bg-white border rounded-md hover:bg-gray-50 text-sm font-medium">Prev Day</button>
+          <button onClick={() => setCurrentDate(new Date())} className="px-3 py-1.5 bg-white border rounded-md hover:bg-gray-50 text-sm font-medium">Today</button>
+          <button onClick={handleNextDay} className="px-3 py-1.5 bg-white border rounded-md hover:bg-gray-50 text-sm font-medium">Next Day</button>
         </div>
       </div>
 
       <div className="flex-1 overflow-auto flex">
-        <div className="w-20 flex-shrink-0 border-r border-slate-100 bg-white relative">
-          <div className="h-14 border-b border-slate-100 bg-slate-50/50 sticky top-0 z-20"></div>
+        <div className="w-16 flex-shrink-0 border-r bg-white relative">
+          <div className="h-10 border-b bg-gray-50 sticky top-0 z-20"></div>
           {hours.map(hour => (
-            <div key={hour} className="h-20 border-b border-slate-50 text-xs text-slate-400 text-right pr-3 pt-2 font-bold uppercase tracking-wider">
+            <div key={hour} className="h-16 border-b text-xs text-gray-400 text-right pr-2 pt-1 font-medium">
               {hour > 12 ? `${hour - 12} PM` : hour === 12 ? '12 PM' : `${hour} AM`}
             </div>
           ))}
         </div>
         <div className="flex-1 grid min-w-[800px] relative" style={{ gridTemplateColumns: `repeat(${classrooms.length}, minmax(0, 1fr))` }}>
           {classrooms.map((classroom) => (
-            <div key={classroom.id} className="border-r border-slate-100 relative">
-              <div className="h-14 border-b border-slate-100 flex flex-col items-center justify-center bg-slate-50/50 sticky top-0 z-10 px-2">
-                <span className="text-sm font-black text-slate-800 truncate leading-none">{classroom.name}</span>
-                <span className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-widest">Cap: {classroom.capacity}</span>
+            <div key={classroom.id} className="border-r relative">
+              <div className="h-10 border-b flex flex-col items-center justify-center bg-gray-50 sticky top-0 z-10">
+                <span className="text-sm font-bold text-gray-900 truncate px-2">{classroom.name}</span>
+                <span className="text-xs font-semibold text-gray-500">Cap: {classroom.capacity}</span>
               </div>
-              <div className="relative" style={{ height: `${hours.length * 5}rem` }}>
-                {hours.map(hour => <div key={hour} className="h-20 border-b border-slate-50"></div>)}
+              <div className="relative" style={{ height: `${hours.length * 4}rem` }}>
+                {hours.map(hour => <div key={hour} className="h-16 border-b border-gray-100"></div>)}
                 {daySessions.filter(s => s.assigned_classroom === classroom.id).map(session => {
                   const start = new Date(session.start_time);
                   const end = new Date(session.end_time);
                   const startMinutesFrom8 = (start.getHours() - 8) * 60 + start.getMinutes();
                   const durationMinutes = (end - start) / (1000 * 60);
-                  const topPos = (startMinutesFrom8 / 60) * 5; 
-                  const heightPos = (durationMinutes / 60) * 5; 
+                  const topPos = (startMinutesFrom8 / 60) * 4; 
+                  const heightPos = (durationMinutes / 60) * 4; 
                   return (
-                    <div key={session.id} className={`absolute left-1 right-1 rounded-xl border p-2 shadow-sm overflow-hidden text-xs transition-all hover:z-20 hover:shadow-md ${getTypeColor(session.type)}`} style={{ top: `${topPos}rem`, height: `${heightPos}rem`, zIndex: 10 }} title={`${session.title}\n${formatTime(start)} - ${formatTime(end)}`}>
-                      <div className="font-bold truncate text-slate-900">{session.title}</div>
-                      <div className="font-semibold opacity-70 mt-0.5 truncate">{formatTime(start)} - {formatTime(end)}</div>
+                    <div key={session.id} className={`absolute left-1 right-1 rounded-md border p-1.5 shadow-sm overflow-hidden text-xs leading-tight transition-all hover:z-20 hover:shadow-md ${getTypeColor(session.type)}`} style={{ top: `${topPos}rem`, height: `${heightPos}rem`, zIndex: 10 }} title={`${session.title}\n${formatTime(start)} - ${formatTime(end)}`}>
+                      <div className="font-semibold truncate">{session.title}</div>
+                      <div className="opacity-80 mt-0.5 truncate">{formatTime(start)} - {formatTime(end)}</div>
                       {heightPos >= 3 && session.assigned_teachers && session.assigned_teachers.length > 0 && (
-                        <div className="mt-1 font-bold opacity-60 truncate flex items-center gap-1">
+                        <div className="mt-1 opacity-75 truncate flex items-center gap-1">
                           <Users size={10}/> {(session.assigned_teachers||[]).map(tid => teachers.find(t=>t.id===tid)?.name.split(' ')[0]).join(', ')}
                         </div>
                       )}
@@ -788,13 +964,13 @@ const TeacherScheduleView = () => {
 
   const getTypeColor = (type) => {
     switch (type) {
-      case 'batch_session': return 'bg-blue-50 border-blue-200 text-blue-800';
-      case 'club_session': return 'bg-purple-50 border-purple-200 text-purple-800';
-      case 'test': case 'mock_test': return 'bg-indigo-50 border-indigo-200 text-indigo-800';
-      case 'partial_reading': return 'bg-teal-50 border-teal-200 text-teal-800';
-      case 'partial_writing': return 'bg-cyan-50 border-cyan-200 text-cyan-800';
-      case 'partial_speaking': return 'bg-amber-50 border-amber-200 text-amber-800';
-      default: return 'bg-orange-50 border-orange-200 text-orange-800';
+      case 'batch_session': return 'bg-blue-100 border-blue-300 text-blue-800';
+      case 'club_session': return 'bg-purple-100 border-purple-300 text-purple-800';
+      case 'test': case 'mock_test': return 'bg-indigo-100 border-indigo-300 text-indigo-800';
+      case 'partial_reading': return 'bg-teal-100 border-teal-300 text-teal-800';
+      case 'partial_writing': return 'bg-cyan-100 border-cyan-300 text-cyan-800';
+      case 'partial_speaking': return 'bg-amber-100 border-amber-300 text-amber-800';
+      default: return 'bg-orange-100 border-orange-300 text-orange-800';
     }
   };
 
@@ -822,63 +998,61 @@ const TeacherScheduleView = () => {
   }, [currentDate, sessions, selectedTeacherId, mode]);
 
   return (
-    <div className="h-[700px] flex flex-col bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
-      <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 flex-wrap gap-4">
-        <div className="flex items-center gap-6">
-          <h2 className="text-xl font-black text-slate-800 flex items-center gap-3"><ClipboardList size={24} className="text-blue-600" /> Roster</h2>
-          <div className="flex bg-white rounded-xl border border-slate-200 p-1 shadow-sm">
-            <button onClick={() => setMode('daily')} className={`px-4 py-2 text-sm font-bold rounded-lg transition-colors ${mode === 'daily' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>Daily Overview</button>
-            <button onClick={() => setMode('weekly')} className={`px-4 py-2 text-sm font-bold rounded-lg transition-colors ${mode === 'weekly' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>Weekly Individual</button>
+    <div className="h-full flex flex-col bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="p-4 border-b flex justify-between items-center bg-gray-50 flex-wrap gap-4">
+        <div className="flex items-center gap-4">
+          <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2"><ClipboardList size={20} className="text-blue-600" /> Teacher Schedule</h2>
+          <div className="flex bg-white rounded-lg border border-gray-200 p-1">
+            <button onClick={() => setMode('daily')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'daily' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}>Daily Overview</button>
+            <button onClick={() => setMode('weekly')} className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors ${mode === 'weekly' ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}>Weekly Individual</button>
           </div>
         </div>
-        <div className="flex gap-3 items-center">
+        <div className="flex gap-2 items-center">
           {mode === 'weekly' && (
-            <select value={selectedTeacherId} onChange={(e) => setSelectedTeacherId(e.target.value)} className="px-4 py-2 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-blue-100 shadow-sm">
+            <select value={selectedTeacherId} onChange={(e) => setSelectedTeacherId(e.target.value)} className="px-2 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500">
               <option value="" disabled>Select Teacher...</option>
               {teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           )}
           {mode === 'daily' ? (
-            <input type="date" value={[currentDate.getFullYear(), String(currentDate.getMonth() + 1).padStart(2, '0'), String(currentDate.getDate()).padStart(2, '0')].join('-')} onChange={(e) => { if (e.target.value) { const [y, m, d] = e.target.value.split('-'); setCurrentDate(new Date(y, m - 1, d)); } }} className="px-4 py-2 border border-slate-200 rounded-xl text-sm font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-100 shadow-sm" />
+            <input type="date" value={[currentDate.getFullYear(), String(currentDate.getMonth() + 1).padStart(2, '0'), String(currentDate.getDate()).padStart(2, '0')].join('-')} onChange={(e) => { if (e.target.value) { const [y, m, d] = e.target.value.split('-'); setCurrentDate(new Date(y, m - 1, d)); } }} className="px-2 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500" />
           ) : (
-             <span className="text-sm font-black text-slate-500 uppercase tracking-widest mr-2">Week of {weekStart?.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+             <span className="text-sm font-medium text-gray-600 mr-2">Week of {weekStart?.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
           )}
-          <div className="flex bg-white rounded-xl border border-slate-200 p-1 shadow-sm">
-            <button onClick={handlePrev} className="px-4 py-2 hover:bg-slate-50 text-sm font-bold text-slate-600 rounded-lg transition-colors"><ChevronLeft size={16}/></button>
-            <button onClick={() => setCurrentDate(new Date())} className="px-4 py-2 hover:bg-slate-50 text-sm font-bold text-slate-600 rounded-lg transition-colors">Today</button>
-            <button onClick={handleNext} className="px-4 py-2 hover:bg-slate-50 text-sm font-bold text-slate-600 rounded-lg transition-colors"><ChevronRight size={16}/></button>
-          </div>
+          <button onClick={handlePrev} className="px-3 py-1.5 bg-white border rounded-md hover:bg-gray-50 text-sm font-medium">Prev</button>
+          <button onClick={() => setCurrentDate(new Date())} className="px-3 py-1.5 bg-white border rounded-md hover:bg-gray-50 text-sm font-medium">Today</button>
+          <button onClick={handleNext} className="px-3 py-1.5 bg-white border rounded-md hover:bg-gray-50 text-sm font-medium">Next</button>
         </div>
       </div>
       <div className="flex-1 overflow-auto flex">
-        <div className="w-20 flex-shrink-0 border-r border-slate-100 bg-white relative">
-          <div className="h-14 border-b border-slate-100 bg-slate-50/50 sticky top-0 z-20"></div>
+        <div className="w-16 flex-shrink-0 border-r bg-white relative">
+          <div className="h-10 border-b bg-gray-50 sticky top-0 z-20"></div>
           {hours.map(hour => (
-            <div key={hour} className="h-20 border-b border-slate-50 text-xs text-slate-400 text-right pr-3 pt-2 font-bold uppercase tracking-wider">{hour > 12 ? `${hour - 12} PM` : hour === 12 ? '12 PM' : `${hour} AM`}</div>
+            <div key={hour} className="h-16 border-b text-xs text-gray-400 text-right pr-2 pt-1 font-medium">{hour > 12 ? `${hour - 12} PM` : hour === 12 ? '12 PM' : `${hour} AM`}</div>
           ))}
         </div>
         {mode === 'daily' ? (
           <div className="flex-1 grid min-w-[800px] relative" style={{ gridTemplateColumns: `repeat(${teachers.length}, minmax(0, 1fr))` }}>
             {teachers.map((teacher) => (
-              <div key={teacher.id} className="border-r border-slate-100 relative">
-                <div className="h-14 border-b border-slate-100 flex items-center justify-center bg-slate-50/50 sticky top-0 z-10 px-2">
-                  <span className="text-sm font-black text-slate-800 truncate text-center" title={teacher.name}>{teacher.name.split(' ')[0]}</span>
+              <div key={teacher.id} className="border-r relative">
+                <div className="h-10 border-b flex items-center justify-center bg-gray-50 sticky top-0 z-10 px-2">
+                  <span className="text-sm font-bold text-gray-900 truncate text-center" title={teacher.name}>{teacher.name}</span>
                 </div>
-                <div className="relative" style={{ height: `${hours.length * 5}rem` }}>
-                  {hours.map(hour => <div key={hour} className="h-20 border-b border-slate-50"></div>)}
+                <div className="relative" style={{ height: `${hours.length * 4}rem` }}>
+                  {hours.map(hour => <div key={hour} className="h-16 border-b border-gray-100"></div>)}
                   {daySessions.filter(s => (s.assigned_teachers || []).includes(teacher.id)).map(session => {
                     const start = new Date(session.start_time);
                     const end = new Date(session.end_time);
                     const startMinutesFrom8 = (start.getHours() - 8) * 60 + start.getMinutes();
                     const durationMinutes = (end - start) / (1000 * 60);
-                    const topPos = (startMinutesFrom8 / 60) * 5; 
-                    const heightPos = (durationMinutes / 60) * 5; 
+                    const topPos = (startMinutesFrom8 / 60) * 4; 
+                    const heightPos = (durationMinutes / 60) * 4; 
                     const roomName = classrooms.find(c => c.id === session.assigned_classroom)?.name || 'TBA';
                     return (
-                      <div key={session.id} className={`absolute left-1 right-1 rounded-xl border p-2 shadow-sm overflow-hidden text-xs transition-all hover:z-20 hover:shadow-md ${getTypeColor(session.type)}`} style={{ top: `${topPos}rem`, height: `${heightPos}rem`, zIndex: 10 }} title={`${session.title}\n${formatTime(start)} - ${formatTime(end)}`}>
-                        <div className="font-bold truncate text-slate-900">{session.title}</div>
-                        <div className="font-semibold opacity-70 mt-0.5 truncate">{formatTime(start)} - {formatTime(end)}</div>
-                        {heightPos >= 3 && <div className="mt-1 font-bold opacity-60 truncate flex items-center gap-1"><MapPin size={10}/>{roomName}</div>}
+                      <div key={session.id} className={`absolute left-1 right-1 rounded-md border p-1.5 shadow-sm overflow-hidden text-xs leading-tight transition-all hover:z-20 hover:shadow-md ${getTypeColor(session.type)}`} style={{ top: `${topPos}rem`, height: `${heightPos}rem`, zIndex: 10 }} title={`${session.title}\n${formatTime(start)} - ${formatTime(end)}`}>
+                        <div className="font-semibold truncate">{session.title}</div>
+                        <div className="opacity-80 mt-0.5 truncate">{formatTime(start)} - {formatTime(end)}</div>
+                        {heightPos >= 3 && <div className="mt-1 opacity-75 truncate flex items-center gap-1"><MapPin size={10}/>{roomName}</div>}
                       </div>
                     );
                   })}
@@ -889,26 +1063,26 @@ const TeacherScheduleView = () => {
         ) : (
           <div className="flex-1 grid grid-cols-7 min-w-[800px] relative">
             {weekDays.map((day, i) => (
-              <div key={i} className="border-r border-slate-100 relative">
-                <div className="h-14 border-b border-slate-100 flex flex-col items-center justify-center bg-slate-50/50 sticky top-0 z-10">
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">{day.toLocaleDateString('en-US', { weekday: 'short' })}</span>
-                  <span className={`text-sm font-black mt-1 ${day.toDateString() === new Date().toDateString() ? 'text-blue-600' : 'text-slate-800'}`}>{day.getDate()}</span>
+              <div key={i} className="border-r relative">
+                <div className="h-10 border-b flex flex-col items-center justify-center bg-gray-50 sticky top-0 z-10">
+                  <span className="text-xs font-semibold text-gray-500 uppercase">{day.toLocaleDateString('en-US', { weekday: 'short' })}</span>
+                  <span className={`text-sm font-bold ${day.toDateString() === new Date().toDateString() ? 'text-blue-600' : 'text-gray-900'}`}>{day.getDate()}</span>
                 </div>
-                <div className="relative" style={{ height: `${hours.length * 5}rem` }}>
-                  {hours.map(hour => <div key={hour} className="h-20 border-b border-slate-50"></div>)}
+                <div className="relative" style={{ height: `${hours.length * 4}rem` }}>
+                  {hours.map(hour => <div key={hour} className="h-16 border-b border-gray-100"></div>)}
                   {weekSessions.filter(s => new Date(s.start_time).toDateString() === day.toDateString()).map(session => {
                     const start = new Date(session.start_time);
                     const end = new Date(session.end_time);
                     const startMinutesFrom8 = (start.getHours() - 8) * 60 + start.getMinutes();
                     const durationMinutes = (end - start) / (1000 * 60);
-                    const topPos = (startMinutesFrom8 / 60) * 5; 
-                    const heightPos = (durationMinutes / 60) * 5; 
+                    const topPos = (startMinutesFrom8 / 60) * 4; 
+                    const heightPos = (durationMinutes / 60) * 4; 
                     const roomName = classrooms.find(c => c.id === session.assigned_classroom)?.name || 'TBA';
                     return (
-                      <div key={session.id} className={`absolute left-1 right-1 rounded-xl border p-2 shadow-sm overflow-hidden text-xs transition-all hover:z-20 hover:shadow-md ${getTypeColor(session.type)}`} style={{ top: `${topPos}rem`, height: `${heightPos}rem`, zIndex: 10 }} title={`${session.title}\n${formatTime(start)} - ${formatTime(end)}`}>
-                        <div className="font-bold truncate text-slate-900">{session.title}</div>
-                        <div className="font-semibold opacity-70 mt-0.5 truncate">{formatTime(start)} - {formatTime(end)}</div>
-                        {heightPos >= 3 && <div className="mt-1 font-bold opacity-60 truncate flex items-center gap-1"><MapPin size={10}/>{roomName}</div>}
+                      <div key={session.id} className={`absolute left-1 right-1 rounded-md border p-1.5 shadow-sm overflow-hidden text-xs leading-tight transition-all hover:z-20 hover:shadow-md ${getTypeColor(session.type)}`} style={{ top: `${topPos}rem`, height: `${heightPos}rem`, zIndex: 10 }} title={`${session.title}\n${formatTime(start)} - ${formatTime(end)}`}>
+                        <div className="font-semibold truncate">{session.title}</div>
+                        <div className="opacity-80 mt-0.5 truncate">{formatTime(start)} - {formatTime(end)}</div>
+                        {heightPos >= 3 && <div className="mt-1 opacity-75 truncate flex items-center gap-1"><MapPin size={10}/>{roomName}</div>}
                       </div>
                     );
                   })}
@@ -1039,83 +1213,80 @@ const ProgramManager = () => {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <div>
-          <h2 className="text-2xl font-black text-slate-800">Recurring Programs</h2>
-          <p className="text-slate-500 font-bold uppercase tracking-widest text-xs mt-1">Batch Automator</p>
-        </div>
-        <button onClick={() => { setEditingProgramId(null); setFormData(defaultFormData); setModalOpen(true); setPreviewMode(false); }} className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl flex items-center gap-2 font-black transition-all shadow-md hover:shadow-lg">
-          <Plus size={20} /> Build Program
+        <h1 className="text-2xl font-bold text-gray-900">Recurring Programs</h1>
+        <button onClick={() => { setEditingProgramId(null); setFormData(defaultFormData); setModalOpen(true); setPreviewMode(false); }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors">
+          <Plus size={20} /> Create Program
         </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {(programs || []).map(program => (
-          <div key={program.id} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm relative group transition-all hover:border-blue-300 hover:shadow-lg">
-            <div className="absolute top-6 right-6 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button onClick={() => handleEdit(program)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-colors" title="Edit Program"><Edit2 size={18} /></button>
-              <button onClick={() => deleteProgram(program.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors" title="Delete Program"><Trash2 size={18} /></button>
+          <div key={program.id} className="bg-white border rounded-xl p-6 shadow-sm relative group transition-colors hover:border-blue-200 hover:shadow-md">
+            <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button onClick={() => handleEdit(program)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title="Edit Program"><Edit2 size={18} /></button>
+              <button onClick={() => deleteProgram(program.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors" title="Delete Program"><Trash2 size={18} /></button>
             </div>
             <Badge color={getSessionColor(program.type)}>{(program.type||'').replace(/_/g, ' ').toUpperCase()}</Badge>
-            <h3 className="text-xl font-black text-slate-900 mt-4 mb-1">{program.name}</h3>
-            <p className="text-xs font-bold text-slate-400 mb-6 uppercase tracking-widest">{program.start_date} to {program.end_date}</p>
+            <h3 className="text-xl font-bold text-gray-900 mt-3 mb-1">{program.name}</h3>
+            <p className="text-sm text-gray-500 mb-4">{program.start_date} to {program.end_date}</p>
             
-            <div className="space-y-4 text-sm bg-slate-50 rounded-2xl p-4 border border-slate-100">
-              <div className="flex items-start gap-3 text-slate-700">
-                <Clock size={16} className="mt-0.5 text-slate-400" />
+            <div className="space-y-3 text-sm">
+              <div className="flex items-start gap-3 text-gray-700">
+                <Clock size={16} className="mt-0.5 text-gray-400" />
                 <div>
-                  <p className="font-bold text-slate-900">{formatTime(createDateFromTime(program.start_date, program.start_time))} - {formatTime(createDateFromTime(program.start_date, program.end_time))}</p>
-                  <div className="flex gap-1.5 mt-2 flex-wrap">
-                    {(program.days_of_week || []).map(d => <span key={d} className="bg-white px-2 py-1 rounded-md text-[10px] font-black text-slate-600 border border-slate-200 uppercase">{daysLabels[d]}</span>)}
+                  <p className="font-medium">{formatTime(createDateFromTime(program.start_date, program.start_time))} - {formatTime(createDateFromTime(program.start_date, program.end_time))}</p>
+                  <div className="flex gap-1 mt-1">
+                    {(program.days_of_week || []).map(d => <span key={d} className="bg-gray-100 px-1.5 py-0.5 rounded text-xs font-medium text-gray-600">{daysLabels[d]}</span>)}
                   </div>
                 </div>
               </div>
-              <div className="flex items-start gap-3 text-slate-700 pt-2 border-t border-slate-200/60">
-                <Users size={16} className="mt-0.5 text-slate-400" />
-                <div className="font-bold">{(program.assigned_teachers || []).map(tid => <p key={tid}>{teachers.find(t => t.id === tid)?.name || 'Unknown'}</p>)}</div>
+              <div className="flex items-start gap-3 text-gray-700">
+                <Users size={16} className="mt-0.5 text-gray-400" />
+                <div>{(program.assigned_teachers || []).map(tid => <p key={tid}>{teachers.find(t => t.id === tid)?.name || 'Unknown'}</p>)}</div>
               </div>
-              <div className="flex items-start gap-3 text-slate-700">
-                <MapPin size={16} className="mt-0.5 text-slate-400" />
-                <p className="font-bold">{classrooms.find(c => c.id === program.assigned_classroom)?.name || 'Unknown'}</p>
+              <div className="flex items-start gap-3 text-gray-700">
+                <MapPin size={16} className="mt-0.5 text-gray-400" />
+                <p>{classrooms.find(c => c.id === program.assigned_classroom)?.name || 'Unknown'}</p>
               </div>
             </div>
           </div>
         ))}
         {(programs || []).length === 0 && (
-          <div className="col-span-full p-16 text-center text-slate-400 border-2 border-dashed border-slate-200 rounded-[3rem]">
-            No recurring programs exist yet. Build one to auto-generate sessions.
+          <div className="col-span-full p-12 text-center text-gray-500 border-2 border-dashed rounded-xl">
+            No recurring programs exist yet. Create one to auto-generate sessions.
           </div>
         )}
       </div>
 
-      <Modal isOpen={isModalOpen} onClose={handleCloseModal} title={previewMode ? "Program Preview" : editingProgramId ? "Edit Program" : "Configure New Program"}>
+      <Modal isOpen={isModalOpen} onClose={handleCloseModal} title={previewMode ? "Program Preview" : editingProgramId ? "Edit Program" : "Create New Program"}>
         {!previewMode ? (
           <form onSubmit={handlePreview} className="space-y-6">
-            <div className="grid grid-cols-2 gap-5">
+            <div className="grid grid-cols-2 gap-4">
               <div className="col-span-2">
-                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Program Name</label>
-                <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 p-3 border font-bold text-slate-800" placeholder="e.g., Weekend IELTS Batch 42" />
+                <label className="block text-sm font-medium text-gray-700 mb-1">Program Name</label>
+                <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500 p-2 border" placeholder="e.g., Weekend IELTS Batch 42" />
               </div>
               
               <div>
-                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Type</label>
-                <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="w-full border-slate-200 rounded-xl p-3 border font-bold text-slate-800 focus:ring-4 focus:ring-blue-100">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+                <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="w-full border-gray-300 rounded-lg p-2 border">
                   <option value="batch">Academic Batch</option><option value="club">Practice Club</option><option value="mock_test">Mock Test</option><option value="partial_reading">Reading Partial</option><option value="partial_writing">Writing Partial</option><option value="partial_speaking">Speaking Partial</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Classroom</label>
-                <select required value={formData.assigned_classroom} onChange={e => setFormData({...formData, assigned_classroom: e.target.value})} className="w-full border-slate-200 rounded-xl p-3 border font-bold text-slate-800 focus:ring-4 focus:ring-blue-100">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Classroom</label>
+                <select required value={formData.assigned_classroom} onChange={e => setFormData({...formData, assigned_classroom: e.target.value})} className="w-full border-gray-300 rounded-lg p-2 border">
                   <option value="">Select Room...</option>
                   {classrooms.map(c => <option key={c.id} value={c.id}>{c.name} (Cap: {c.capacity})</option>)}
                 </select>
               </div>
 
               <div className="col-span-2">
-                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Days of the Week</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Days of the Week</label>
                 <div className="flex gap-2">
                   {daysLabels.map((day, i) => (
-                    <button key={i} type="button" onClick={() => toggleDay(i)} className={`flex-1 py-3 rounded-xl text-sm font-black transition-all border ${formData.days_of_week.includes(i) ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'}`}>
+                    <button key={i} type="button" onClick={() => toggleDay(i)} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors border ${formData.days_of_week.includes(i) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 hover:bg-gray-50'}`}>
                       {day}
                     </button>
                   ))}
@@ -1123,33 +1294,33 @@ const ProgramManager = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Start Date</label>
-                <input required type="date" value={formData.start_date} onChange={e => setFormData({...formData, start_date: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl font-bold text-slate-800 focus:ring-4 focus:ring-blue-100" />
+                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+                <input required type="date" value={formData.start_date} onChange={e => setFormData({...formData, start_date: e.target.value})} className="w-full p-2 border rounded-lg" />
               </div>
               <div>
-                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">End Date</label>
-                <input required type="date" value={formData.end_date} onChange={e => setFormData({...formData, end_date: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl font-bold text-slate-800 focus:ring-4 focus:ring-blue-100" />
+                <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+                <input required type="date" value={formData.end_date} onChange={e => setFormData({...formData, end_date: e.target.value})} className="w-full p-2 border rounded-lg" />
               </div>
 
               <div>
-                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Session Start Time</label>
-                <input required type="time" value={formData.start_time} onChange={e => setFormData({...formData, start_time: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl font-bold text-slate-800 focus:ring-4 focus:ring-blue-100" />
+                <label className="block text-sm font-medium text-gray-700 mb-1">Session Start Time</label>
+                <input required type="time" value={formData.start_time} onChange={e => setFormData({...formData, start_time: e.target.value})} className="w-full p-2 border rounded-lg" />
               </div>
               <div>
-                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Session End Time</label>
-                <input required type="time" value={formData.end_time} onChange={e => setFormData({...formData, end_time: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl font-bold text-slate-800 focus:ring-4 focus:ring-blue-100" />
+                <label className="block text-sm font-medium text-gray-700 mb-1">Session End Time</label>
+                <input required type="time" value={formData.end_time} onChange={e => setFormData({...formData, end_time: e.target.value})} className="w-full p-2 border rounded-lg" />
               </div>
 
               <div className="col-span-2">
-                <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-2">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
                   Assign Teachers (Max 2)
-                  {['mock_test', 'partial_reading', 'partial_writing', 'partial_speaking'].includes(formData.type) && <span className="text-slate-400 font-bold normal-case text-[10px] bg-slate-100 px-2 py-0.5 rounded-full">- Optional</span>}
+                  {['mock_test', 'partial_reading', 'partial_writing', 'partial_speaking'].includes(formData.type) && <span className="text-gray-400 font-normal italic ml-2">- Optional for Assessments</span>}
                 </label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 gap-2">
                   {teachers.map(t => (
-                    <label key={t.id} className="flex items-center p-3 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors">
-                      <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500 mr-3 h-5 w-5 border-slate-300" checked={formData.assigned_teachers.includes(t.id)} onChange={() => {}} onClick={(e) => { e.stopPropagation(); toggleTeacher(t.id); }} />
-                      <span className="text-sm font-bold text-slate-800">{t.name}</span>
+                    <label key={t.id} className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
+                      <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500 mr-3 h-4 w-4" checked={formData.assigned_teachers.includes(t.id)} onChange={() => {}} onClick={(e) => { e.stopPropagation(); toggleTeacher(t.id); }} />
+                      <span className="text-sm font-medium text-gray-900">{t.name}</span>
                     </label>
                   ))}
                 </div>
@@ -1157,54 +1328,54 @@ const ProgramManager = () => {
             </div>
 
             {liveConflicts.length > 0 && (
-              <div className="p-5 bg-orange-50 border border-orange-200 rounded-2xl flex items-start gap-4">
-                <AlertTriangle className="text-orange-500 shrink-0 mt-0.5" size={24} />
+              <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg flex items-start gap-3">
+                <AlertTriangle className="text-orange-500 shrink-0" size={20} />
                 <div>
-                  <h4 className="text-sm font-black text-orange-900">Early Overlaps Detected</h4>
-                  <ul className="text-xs font-bold text-orange-700 mt-2 list-disc list-inside space-y-1">{liveConflicts.map((c, i) => <li key={i}>{c}</li>)}</ul>
-                  <p className="text-[10px] font-black text-orange-500/80 mt-3 uppercase tracking-widest">Full analysis on next step</p>
+                  <h4 className="text-sm font-bold text-orange-800">Early Overlaps Detected</h4>
+                  <ul className="text-xs text-orange-700 mt-1 list-disc list-inside">{liveConflicts.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                  <p className="text-xs text-orange-600 mt-2 font-medium">Full analysis will be shown on the next step.</p>
                 </div>
               </div>
             )}
 
-            <div className="pt-6 flex justify-end gap-3 border-t border-slate-100">
-              <button type="button" onClick={handleCloseModal} className="px-5 py-2.5 text-slate-600 font-bold hover:bg-slate-100 rounded-xl transition-colors">Cancel</button>
-              <button type="submit" className="px-6 py-2.5 bg-blue-600 text-white font-black rounded-xl hover:bg-blue-700 shadow-md hover:shadow-lg transition-all">Preview Generation</button>
+            <div className="pt-4 flex justify-end gap-3 border-t">
+              <button type="button" onClick={handleCloseModal} className="px-4 py-2 text-gray-700 font-medium hover:bg-gray-100 rounded-lg">Cancel</button>
+              <button type="submit" className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700">Preview Generation</button>
             </div>
           </form>
         ) : (
           <div className="space-y-6">
             {previewData ? (
               <>
-                <div className="flex justify-between items-center bg-slate-50 p-6 rounded-2xl border border-slate-200">
+                <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl border border-gray-100">
                   <div className="text-center px-4">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total</p>
-                    <p className="text-4xl font-black text-slate-900 mt-1">{(previewData?.valid?.length || 0) + (previewData?.conflicting?.length || 0)}</p>
+                    <p className="text-sm text-gray-500 font-medium">Total Generated</p>
+                    <p className="text-3xl font-bold text-gray-900">{(previewData?.valid?.length || 0) + (previewData?.conflicting?.length || 0)}</p>
                   </div>
-                  <div className="w-px h-16 bg-slate-200"></div>
+                  <div className="w-px h-12 bg-gray-200"></div>
                   <div className="text-center px-4">
-                    <p className="text-[10px] font-black text-green-600 uppercase tracking-widest">Valid</p>
-                    <p className="text-4xl font-black text-green-600 mt-1">{previewData?.valid?.length || 0}</p>
+                    <p className="text-sm text-green-600 font-medium">Valid Sessions</p>
+                    <p className="text-3xl font-bold text-green-600">{previewData?.valid?.length || 0}</p>
                   </div>
-                  <div className="w-px h-16 bg-slate-200"></div>
+                  <div className="w-px h-12 bg-gray-200"></div>
                   <div className="text-center px-4">
-                    <p className="text-[10px] font-black text-red-600 uppercase tracking-widest">Conflicts</p>
-                    <p className="text-4xl font-black text-red-600 mt-1">{previewData?.conflicting?.length || 0}</p>
+                    <p className="text-sm text-red-600 font-medium">Conflicts Found</p>
+                    <p className="text-3xl font-bold text-red-600">{previewData?.conflicting?.length || 0}</p>
                   </div>
                 </div>
 
                 <div className="max-h-96 overflow-y-auto space-y-6 pr-2">
                   {(previewData?.conflicting || []).length > 0 && (
                     <div>
-                      <h4 className="font-black text-red-800 mb-3 flex items-center gap-2"><AlertTriangle size={20} /> Conflicting Sessions</h4>
+                      <h4 className="font-bold text-red-800 mb-3 flex items-center gap-2"><AlertTriangle size={18} /> Conflicting Sessions</h4>
                       <ul className="space-y-3">
                         {previewData.conflicting.map((c, i) => (
-                          <li key={i} className="p-4 bg-red-50 border border-red-200 rounded-xl text-sm">
-                            <div className="font-black text-red-900 mb-2 flex items-center gap-3">
+                          <li key={i} className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm">
+                            <div className="font-semibold text-red-900 mb-1">
                               {new Date(c.session.start_time).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} 
-                              <span className="px-2 py-1 bg-red-100 rounded-md text-xs">{formatTime(c.session.start_time)} - {formatTime(c.session.end_time)}</span>
+                              <span className="ml-2 px-2 py-0.5 bg-red-100 rounded text-xs">{formatTime(c.session.start_time)} - {formatTime(c.session.end_time)}</span>
                             </div>
-                            <ul className="list-disc list-inside text-red-700 font-bold mt-1 text-xs space-y-1">
+                            <ul className="list-disc list-inside text-red-700 mt-1 text-xs">
                               {(c.reasons || []).map((r, j) => <li key={j}>{r}</li>)}
                             </ul>
                           </li>
@@ -1215,12 +1386,12 @@ const ProgramManager = () => {
 
                   {(previewData?.valid || []).length > 0 && (
                     <div>
-                      <h4 className="font-black text-green-800 mb-3 flex items-center gap-2"><Check size={20} /> Valid Sessions</h4>
-                      <ul className="grid grid-cols-2 gap-3">
+                      <h4 className="font-bold text-green-800 mb-3 flex items-center gap-2"><Check size={18} /> Valid Sessions Preview</h4>
+                      <ul className="grid grid-cols-2 gap-2">
                         {previewData.valid.map((s, i) => (
-                          <li key={i} className="p-3 bg-green-50 border border-green-200 rounded-xl text-xs font-black text-green-900">
+                          <li key={i} className="p-2 bg-green-50 border border-green-200 rounded-lg text-xs font-medium text-green-800">
                             {new Date(s.start_time).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                            <div className="text-green-600 font-bold mt-1">{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
+                            <div className="text-green-600 font-normal mt-0.5">{formatTime(s.start_time)} - {formatTime(s.end_time)}</div>
                           </li>
                         ))}
                       </ul>
@@ -1228,17 +1399,17 @@ const ProgramManager = () => {
                   )}
                 </div>
 
-                <div className="pt-6 flex justify-between gap-3 border-t border-slate-100">
-                  <button type="button" disabled={isSaving} onClick={() => setPreviewMode(false)} className="px-5 py-2.5 text-slate-600 font-bold hover:bg-slate-100 rounded-xl disabled:opacity-50 transition-colors">Back to Edit</button>
-                  <div className="flex gap-3">
-                    <button type="button" disabled={isSaving} onClick={handleCloseModal} className="px-5 py-2.5 text-slate-600 font-bold hover:bg-slate-100 rounded-xl disabled:opacity-50 transition-colors">Cancel</button>
+                <div className="pt-4 flex justify-between gap-3 border-t">
+                  <button type="button" disabled={isSaving} onClick={() => setPreviewMode(false)} className="px-4 py-2 text-gray-700 font-medium hover:bg-gray-100 rounded-lg disabled:opacity-50">Back to Edit</button>
+                  <div className="flex gap-2">
+                    <button type="button" disabled={isSaving} onClick={handleCloseModal} className="px-4 py-2 text-gray-700 font-medium hover:bg-gray-100 rounded-lg disabled:opacity-50">Cancel</button>
                     {(previewData?.conflicting || []).length > 0 && (
-                      <button onClick={() => handleConfirm(false)} disabled={isSaving} className="px-5 py-2.5 bg-red-100 text-red-700 font-black rounded-xl hover:bg-red-200 disabled:opacity-50 transition-colors">Force Save All</button>
+                      <button onClick={() => handleConfirm(false)} disabled={isSaving} className="px-4 py-2 bg-red-100 text-red-700 font-medium rounded-lg hover:bg-red-200 disabled:opacity-50">Force Save All</button>
                     )}
                     <button 
                       onClick={() => handleConfirm(true)} 
                       disabled={(previewData?.valid || []).length === 0 || isSaving}
-                      className="px-6 py-2.5 bg-blue-600 text-white font-black rounded-xl hover:bg-blue-700 disabled:opacity-50 transition-all flex items-center gap-2 shadow-md hover:shadow-lg"
+                      className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                     >
                       {isSaving ? 'Saving...' : ((previewData?.conflicting || []).length > 0 ? 'Save Valid Only' : 'Confirm & Save')}
                     </button>
@@ -1246,7 +1417,7 @@ const ProgramManager = () => {
                 </div>
               </>
             ) : (
-              <div className="p-16 text-center italic font-bold text-slate-400">Generating preview matrix...</div>
+              <div className="p-10 text-center italic text-gray-500">Generating preview...</div>
             )}
           </div>
         )}
@@ -1319,103 +1490,103 @@ const SessionManager = () => {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-2xl font-black text-slate-800">Ad-Hoc Sessions</h2>
-          <p className="text-slate-500 font-bold uppercase tracking-widest text-xs mt-1">Single Occurrence Events</p>
+          <h1 className="text-2xl font-bold text-gray-900">Ad-Hoc Sessions</h1>
+          <p className="text-gray-500 mt-1">Manage single occurrence events like Mock Tests or Staff Meetings.</p>
         </div>
-        <button onClick={() => { setEditingSessionId(null); setFormData(defaultFormData); setModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl flex items-center gap-2 font-black transition-all shadow-md hover:shadow-lg"><Plus size={20} /> Create Session</button>
+        <button onClick={() => { setEditingSessionId(null); setFormData(defaultFormData); setModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors"><Plus size={20} /> Create Session</button>
       </div>
 
-      <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+      <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
         <table className="w-full text-left border-collapse">
           <thead>
-            <tr className="bg-slate-50 border-b border-slate-200 text-[10px] uppercase tracking-widest text-slate-400 font-black">
-              <th className="p-6">Title & Type</th><th className="p-6">Date & Time</th><th className="p-6">Teachers</th><th className="p-6">Classroom</th><th className="p-6 text-right">Actions</th>
+            <tr className="bg-gray-50 border-b text-xs uppercase text-gray-500 font-semibold">
+              <th className="p-4">Title & Type</th><th className="p-4">Date & Time</th><th className="p-4">Teachers</th><th className="p-4">Classroom</th><th className="p-4 text-right">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-gray-100">
             {adhocSessions.map(session => {
               const start = new Date(session.start_time);
               return (
-                <tr key={session.id} className="hover:bg-slate-50/50 transition-colors group">
-                  <td className="p-6">
-                    <p className="font-black text-slate-900">{session.title}</p>
-                    <div className="mt-2"><Badge color={getSessionColor(session.type)}>{(session.type||'').replace(/_/g, ' ').toUpperCase()}</Badge></div>
+                <tr key={session.id} className="hover:bg-gray-50 transition-colors group">
+                  <td className="p-4">
+                    <p className="font-medium text-gray-900">{session.title}</p>
+                    <div className="mt-1"><Badge color={getSessionColor(session.type)}>{(session.type||'').replace(/_/g, ' ').toUpperCase()}</Badge></div>
                   </td>
-                  <td className="p-6 text-sm text-slate-700">
-                    <p className="font-bold">{start.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
-                    <p className="text-slate-400 font-black text-xs mt-1">{formatTime(session.start_time)} - {formatTime(session.end_time)}</p>
+                  <td className="p-4 text-sm text-gray-700">
+                    <p className="font-medium">{start.toLocaleDateString()}</p>
+                    <p className="text-gray-500">{formatTime(session.start_time)} - {formatTime(session.end_time)}</p>
                   </td>
-                  <td className="p-6 text-sm text-slate-700 font-bold space-y-1">{(session.assigned_teachers||[]).map(tid => <div key={tid}>{teachers.find(t=>t.id===tid)?.name}</div>)}</td>
-                  <td className="p-6 text-sm text-slate-700 font-bold">{classrooms.find(c=>c.id === session.assigned_classroom)?.name}</td>
-                  <td className="p-6 text-right">
+                  <td className="p-4 text-sm text-gray-700">{(session.assigned_teachers||[]).map(tid => <div key={tid}>{teachers.find(t=>t.id===tid)?.name}</div>)}</td>
+                  <td className="p-4 text-sm text-gray-700">{classrooms.find(c=>c.id === session.assigned_classroom)?.name}</td>
+                  <td className="p-4 text-right">
                     <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => handleEdit(session)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-colors"><Edit2 size={18} /></button>
-                      <button onClick={() => deleteSession(session.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={18} /></button>
+                      <button onClick={() => handleEdit(session)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"><Edit2 size={18} /></button>
+                      <button onClick={() => deleteSession(session.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"><Trash2 size={18} /></button>
                     </div>
                   </td>
                 </tr>
               )
             })}
-            {adhocSessions.length === 0 && <tr><td colSpan="5" className="p-16 text-center font-bold text-slate-400">No ad-hoc sessions scheduled.</td></tr>}
+            {adhocSessions.length === 0 && <tr><td colSpan="5" className="p-8 text-center text-gray-500">No ad-hoc sessions scheduled.</td></tr>}
           </tbody>
         </table>
       </div>
 
       <Modal isOpen={isModalOpen} onClose={handleCloseModal} title={editingSessionId ? "Edit Session" : "Create Ad-Hoc Session"}>
         <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="grid grid-cols-2 gap-5">
+          <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
-              <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Session Title</label>
-              <input required type="text" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 font-bold text-slate-800" placeholder="e.g., General Training Mock Test" />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Session Title</label>
+              <input required type="text" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} className="w-full p-2 border rounded-lg" placeholder="e.g., General Training Mock Test" />
             </div>
             <div>
-              <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Type</label>
-              <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 font-bold text-slate-800">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+              <select value={formData.type} onChange={e => setFormData({...formData, type: e.target.value})} className="w-full p-2 border rounded-lg">
                 <option value="test">Generic Test</option><option value="mock_test">Full Mock Test</option><option value="partial_reading">Reading Partial</option><option value="partial_writing">Writing Partial</option><option value="partial_speaking">Speaking Partial</option><option value="meeting">Staff Meeting</option><option value="extra_class">Extra Class</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Classroom</label>
-              <select required value={formData.assigned_classroom} onChange={e => setFormData({...formData, assigned_classroom: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 font-bold text-slate-800">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Classroom</label>
+              <select required value={formData.assigned_classroom} onChange={e => setFormData({...formData, assigned_classroom: e.target.value})} className="w-full p-2 border rounded-lg">
                 <option value="">Select Room...</option>{classrooms.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
             <div className="col-span-2">
-              <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Date</label>
-              <input required type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 font-bold text-slate-800" />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+              <input required type="date" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} className="w-full p-2 border rounded-lg" />
             </div>
             <div>
-              <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Start Time</label>
-              <input required type="time" value={formData.start_time} onChange={e => setFormData({...formData, start_time: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 font-bold text-slate-800" />
+              <label className="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
+              <input required type="time" value={formData.start_time} onChange={e => setFormData({...formData, start_time: e.target.value})} className="w-full p-2 border rounded-lg" />
             </div>
             <div>
-              <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">End Time</label>
-              <input required type="time" value={formData.end_time} onChange={e => setFormData({...formData, end_time: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 font-bold text-slate-800" />
+              <label className="block text-sm font-medium text-gray-700 mb-1">End Time</label>
+              <input required type="time" value={formData.end_time} onChange={e => setFormData({...formData, end_time: e.target.value})} className="w-full p-2 border rounded-lg" />
             </div>
             <div className="col-span-2">
-              <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Assign Teachers (Max 2)</label>
-              <div className="grid grid-cols-2 gap-3">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Assign Teachers (Max 2)</label>
+              <div className="grid grid-cols-2 gap-2">
                 {teachers.map(t => (
-                  <label key={t.id} className="flex items-center p-3 border border-slate-200 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors">
-                    <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500 mr-3 h-5 w-5 border-slate-300" checked={formData.assigned_teachers.includes(t.id)} onChange={() => {}} onClick={(e) => { e.stopPropagation(); toggleTeacher(t.id); }} />
-                    <span className="text-sm font-bold text-slate-800">{t.name}</span>
+                  <label key={t.id} className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
+                    <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500 mr-3 h-4 w-4" checked={formData.assigned_teachers.includes(t.id)} onChange={() => {}} onClick={(e) => { e.stopPropagation(); toggleTeacher(t.id); }} />
+                    <span className="text-sm font-medium text-gray-900">{t.name}</span>
                   </label>
                 ))}
               </div>
             </div>
           </div>
           {conflicts.length > 0 && (
-            <div className="p-5 bg-red-50 border border-red-200 rounded-2xl flex items-start gap-4">
-              <AlertTriangle className="text-red-500 shrink-0 mt-0.5" size={24} />
+            <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+              <AlertTriangle className="text-red-500 shrink-0" size={20} />
               <div>
-                <h4 className="text-sm font-black text-red-900">Cannot Save: Schedule Conflict</h4>
-                <ul className="text-xs font-bold text-red-700 mt-2 list-disc list-inside space-y-1">{conflicts.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                <h4 className="text-sm font-bold text-red-800">Cannot Save: Schedule Conflict</h4>
+                <ul className="text-xs text-red-700 mt-1 list-disc list-inside">{conflicts.map((c, i) => <li key={i}>{c}</li>)}</ul>
               </div>
             </div>
           )}
-          <div className="pt-6 flex justify-end gap-3 border-t border-slate-100">
-            <button type="button" onClick={handleCloseModal} disabled={isSaving} className="px-5 py-2.5 text-slate-600 font-bold hover:bg-slate-100 rounded-xl disabled:opacity-50 transition-colors">Cancel</button>
-            <button type="submit" disabled={conflicts.length > 0 || isSaving} className="px-6 py-2.5 bg-blue-600 text-white font-black rounded-xl hover:bg-blue-700 disabled:opacity-50 shadow-md transition-all">{isSaving ? 'Saving...' : editingSessionId ? 'Update Session' : 'Save Session'}</button>
+          <div className="pt-4 flex justify-end gap-3 border-t">
+            <button type="button" onClick={handleCloseModal} disabled={isSaving} className="px-4 py-2 text-gray-700 font-medium hover:bg-gray-100 rounded-lg disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={conflicts.length > 0 || isSaving} className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">{isSaving ? 'Saving...' : editingSessionId ? 'Update Session' : 'Save Session'}</button>
           </div>
         </form>
       </Modal>
@@ -1447,80 +1618,80 @@ const ResourceManager = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-2xl font-black text-slate-800">Resource Management</h2>
-        <p className="text-slate-500 font-bold uppercase tracking-widest text-xs mt-1">Configure Spaces & Personnel</p>
+        <h1 className="text-2xl font-bold text-gray-900">Resource Management</h1>
+        <p className="text-gray-500 mt-1">Manage teachers and classroom spaces.</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-[calc(100vh-14rem)]">
-          <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 shrink-0">
-            <h2 className="text-xl font-black text-slate-800 flex items-center gap-3"><Users size={24} className="text-blue-600" /> Teachers</h2>
-            <button onClick={() => { setTeacherForm(defaultTeacherForm); setTeacherModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 text-sm font-black transition-all shadow-md"><Plus size={18} /> Add</button>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[calc(100vh-12rem)]">
+          <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 shrink-0">
+            <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2"><Users size={20} className="text-blue-600" /> Teachers</h2>
+            <button onClick={() => { setTeacherForm(defaultTeacherForm); setTeacherModalOpen(true); }} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-sm font-medium transition-colors"><Plus size={16} /> Add Teacher</button>
           </div>
           <div className="overflow-auto flex-1">
-            <ul className="divide-y divide-slate-100">
+            <ul className="divide-y divide-gray-100">
               {teachers.map(teacher => (
-                <li key={teacher.id} className="p-5 hover:bg-slate-50/80 flex items-center justify-between group transition-colors">
-                  <div><h4 className="font-black text-slate-900">{teacher.name}</h4></div>
+                <li key={teacher.id} className="p-4 hover:bg-gray-50 flex items-center justify-between group transition-colors">
+                  <div><h4 className="font-medium text-gray-900">{teacher.name}</h4></div>
                   <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => { setTeacherForm(teacher); setTeacherModalOpen(true); }} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-colors"><Edit2 size={18} /></button>
-                    <button onClick={() => deleteTeacher(teacher.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={18} /></button>
+                    <button onClick={() => { setTeacherForm(teacher); setTeacherModalOpen(true); }} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"><Edit2 size={16} /></button>
+                    <button onClick={() => deleteTeacher(teacher.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"><Trash2 size={16} /></button>
                   </div>
                 </li>
               ))}
-              {teachers.length === 0 && <li className="p-12 text-center font-bold text-slate-400">No teachers found.</li>}
+              {teachers.length === 0 && <li className="p-8 text-center text-gray-500">No teachers found.</li>}
             </ul>
           </div>
         </div>
 
-        <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-[calc(100vh-14rem)]">
-          <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50 shrink-0">
-            <h2 className="text-xl font-black text-slate-800 flex items-center gap-3"><MapPin size={24} className="text-purple-600" /> Classrooms</h2>
-            <button onClick={() => { setClassroomForm(defaultClassroomForm); setClassroomModalOpen(true); }} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 text-sm font-black transition-all shadow-md"><Plus size={18} /> Add</button>
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[calc(100vh-12rem)]">
+          <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50 shrink-0">
+            <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2"><MapPin size={20} className="text-purple-600" /> Classrooms</h2>
+            <button onClick={() => { setClassroomForm(defaultClassroomForm); setClassroomModalOpen(true); }} className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-sm font-medium transition-colors"><Plus size={16} /> Add Classroom</button>
           </div>
           <div className="overflow-auto flex-1">
-            <ul className="divide-y divide-slate-100">
+            <ul className="divide-y divide-gray-100">
               {classrooms.map(classroom => (
-                <li key={classroom.id} className="p-5 hover:bg-slate-50/80 flex items-center justify-between group transition-colors">
-                  <div><h4 className="font-black text-slate-900">{classroom.name}</h4><p className="text-[10px] font-bold text-slate-400 mt-1 uppercase tracking-widest">Capacity: {classroom.capacity}</p></div>
+                <li key={classroom.id} className="p-4 hover:bg-gray-50 flex items-center justify-between group transition-colors">
+                  <div><h4 className="font-medium text-gray-900">{classroom.name}</h4><p className="text-sm text-gray-500 mt-0.5">Capacity: {classroom.capacity}</p></div>
                   <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => { setClassroomForm(classroom); setClassroomModalOpen(true); }} className="p-2 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded-xl transition-colors"><Edit2 size={18} /></button>
-                    <button onClick={() => deleteClassroom(classroom.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={18} /></button>
+                    <button onClick={() => { setClassroomForm(classroom); setClassroomModalOpen(true); }} className="p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-md transition-colors"><Edit2 size={16} /></button>
+                    <button onClick={() => deleteClassroom(classroom.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"><Trash2 size={16} /></button>
                   </div>
                 </li>
               ))}
-              {classrooms.length === 0 && <li className="p-12 text-center font-bold text-slate-400">No classrooms found.</li>}
+              {classrooms.length === 0 && <li className="p-8 text-center text-gray-500">No classrooms found.</li>}
             </ul>
           </div>
         </div>
       </div>
 
       <Modal isOpen={isTeacherModalOpen} onClose={() => setTeacherModalOpen(false)} title={teacherForm.id ? "Edit Teacher" : "Add New Teacher"}>
-        <form onSubmit={handleTeacherSubmit} className="space-y-5">
+        <form onSubmit={handleTeacherSubmit} className="space-y-4">
           <div>
-            <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Teacher Name</label>
-            <input required type="text" value={teacherForm.name} onChange={e => setTeacherForm({...teacherForm, name: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-blue-100 font-bold text-slate-800" placeholder="e.g., Sarah Jenkins" />
+            <label className="block text-sm font-medium text-gray-700 mb-1">Teacher Name</label>
+            <input required type="text" value={teacherForm.name} onChange={e => setTeacherForm({...teacherForm, name: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., Sarah Jenkins" />
           </div>
-          <div className="pt-6 flex justify-end gap-3 border-t border-slate-100">
-            <button type="button" onClick={() => setTeacherModalOpen(false)} className="px-5 py-2.5 text-slate-600 font-bold hover:bg-slate-100 rounded-xl transition-colors">Cancel</button>
-            <button type="submit" className="px-6 py-2.5 bg-blue-600 text-white font-black rounded-xl hover:bg-blue-700 shadow-md transition-all">Save</button>
+          <div className="pt-4 flex justify-end gap-3 border-t">
+            <button type="button" onClick={() => setTeacherModalOpen(false)} className="px-4 py-2 text-gray-700 font-medium hover:bg-gray-100 rounded-lg">Cancel</button>
+            <button type="submit" className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700">Save Teacher</button>
           </div>
         </form>
       </Modal>
 
       <Modal isOpen={isClassroomModalOpen} onClose={() => setClassroomModalOpen(false)} title={classroomForm.id ? "Edit Classroom" : "Add New Classroom"}>
-        <form onSubmit={handleClassroomSubmit} className="space-y-5">
+        <form onSubmit={handleClassroomSubmit} className="space-y-4">
           <div>
-            <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Classroom Name</label>
-            <input required type="text" value={classroomForm.name} onChange={e => setClassroomForm({...classroomForm, name: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-purple-100 font-bold text-slate-800" placeholder="e.g., Room A" />
+            <label className="block text-sm font-medium text-gray-700 mb-1">Classroom Name</label>
+            <input required type="text" value={classroomForm.name} onChange={e => setClassroomForm({...classroomForm, name: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-purple-500 focus:border-purple-500" placeholder="e.g., Room A" />
           </div>
           <div>
-            <label className="block text-xs font-black text-slate-500 uppercase tracking-widest mb-2">Capacity</label>
-            <input required type="number" min="1" max="500" value={classroomForm.capacity} onChange={e => setClassroomForm({...classroomForm, capacity: e.target.value})} className="w-full p-3 border border-slate-200 rounded-xl focus:ring-4 focus:ring-purple-100 font-bold text-slate-800" />
+            <label className="block text-sm font-medium text-gray-700 mb-1">Capacity</label>
+            <input required type="number" min="1" max="500" value={classroomForm.capacity} onChange={e => setClassroomForm({...classroomForm, capacity: e.target.value})} className="w-full p-2 border border-gray-300 rounded-lg focus:ring-purple-500 focus:border-purple-500" />
           </div>
-          <div className="pt-6 flex justify-end gap-3 border-t border-slate-100">
-            <button type="button" onClick={() => setClassroomModalOpen(false)} className="px-5 py-2.5 text-slate-600 font-bold hover:bg-slate-100 rounded-xl transition-colors">Cancel</button>
-            <button type="submit" className="px-6 py-2.5 bg-purple-600 text-white font-black rounded-xl hover:bg-purple-700 shadow-md transition-all">Save</button>
+          <div className="pt-4 flex justify-end gap-3 border-t">
+            <button type="button" onClick={() => setClassroomModalOpen(false)} className="px-4 py-2 text-gray-700 font-medium hover:bg-gray-100 rounded-lg">Cancel</button>
+            <button type="submit" className="px-6 py-2 bg-purple-600 text-white font-medium rounded-lg hover:bg-purple-700">Save Classroom</button>
           </div>
         </form>
       </Modal>
@@ -1531,12 +1702,12 @@ const ResourceManager = () => {
 
 // --- APP SHELL WRAPPER ---
 const AppShell = () => {
-  const { user, profile, signOut, globalError } = useContext(StoreContext);
+  const { user, profile, branches, switchBranch, signOut, globalError } = useContext(StoreContext);
   const [activeTab, setActiveTab] = useState('dashboard');
 
   if (!user) return <LoginView />;
 
-  const navigation = [
+  const baseNavigation = [
     { id: 'dashboard', name: 'Dashboard', icon: LayoutDashboard },
     { id: 'calendar', name: 'Weekly Calendar', icon: Calendar },
     { id: 'teacher-schedule', name: 'Teacher Schedules', icon: Briefcase },
@@ -1546,29 +1717,21 @@ const AppShell = () => {
     { id: 'resources', name: 'Resources', icon: Settings },
   ];
 
+  const navigation = profile?.role === 'super_admin' 
+    ? [...baseNavigation, { id: 'admin', name: 'Global Admin', icon: ShieldAlert }] 
+    : baseNavigation;
+
   return (
-    <div className="min-h-screen bg-slate-50/50 flex text-slate-900 font-sans">
-      <div className="w-80 bg-white border-r border-slate-200 flex flex-col shadow-sm sticky top-0 h-screen z-40">
-        <div className="h-24 flex items-center px-10 border-b border-slate-100 shrink-0">
-          <GraduationCap className="text-blue-600 mr-4" size={36} />
-          <div className="flex flex-col">
-            <span className="text-2xl font-black tracking-tighter text-slate-800">HEXA'S ERP</span>
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">Cloud Infrastructure</span>
-          </div>
+    <div className="min-h-screen bg-gray-50/50 flex text-gray-900 font-sans">
+      <div className="w-64 bg-white border-r border-gray-200 flex flex-col z-40">
+        <div className="h-16 flex items-center px-6 border-b border-gray-100 shrink-0">
+          <GraduationCap className="text-red-600 mr-2" size={28} />
+          <span className="text-lg font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-red-600 to-blue-800">
+            HEXA'S ERP
+          </span>
         </div>
 
-        <div className="p-8 shrink-0">
-          <div className="bg-slate-900 rounded-3xl p-6 text-white shadow-2xl shadow-slate-200">
-            <p className="text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">Active Tenancy</p>
-            <p className="text-lg font-black truncate leading-tight mb-1">{profile?.branches?.name || "Root Access"}</p>
-            <div className="flex items-center gap-2 mt-4">
-              <div className="h-2 w-2 rounded-full bg-green-400 animate-pulse"></div>
-              <p className="text-[10px] font-black text-green-400 uppercase tracking-widest">{(profile?.role || 'user').replace('_', ' ')}</p>
-            </div>
-          </div>
-        </div>
-
-        <nav className="flex-1 px-6 space-y-2 overflow-y-auto">
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
           {navigation.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -1576,69 +1739,70 @@ const AppShell = () => {
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl text-sm font-black transition-all ${
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all ${
                   isActive 
-                    ? 'bg-blue-600 text-white shadow-xl shadow-blue-100 scale-[1.02]' 
-                    : 'text-slate-500 hover:bg-slate-50 hover:text-blue-600'
+                    ? (item.id === 'admin' ? 'bg-red-50 text-red-800' : 'bg-blue-50 text-blue-800')
+                    : 'text-gray-600 hover:bg-gray-100 hover:text-blue-800'
                 }`}
               >
-                <Icon size={22} className={isActive ? 'text-white' : 'text-slate-300'} />
-                <span>{item.name}</span>
+                <Icon size={20} className={isActive ? (item.id === 'admin' ? 'text-red-800' : 'text-blue-800') : 'text-gray-400'} />
+                {item.name}
               </button>
             );
           })}
         </nav>
 
-        <div className="p-8 border-t border-slate-100 space-y-6 shrink-0">
-          <div className="flex items-center gap-4 px-2">
-            <div className="h-10 w-10 rounded-full bg-blue-50 flex items-center justify-center text-sm font-black text-blue-600 border-2 border-white shadow-sm ring-1 ring-slate-100 shrink-0">
-              {(profile?.email || 'U').charAt(0).toUpperCase()}
-            </div>
-            <div className="flex-1 overflow-hidden">
-              <p className="text-xs font-black text-slate-800 truncate">{profile?.email || 'User'}</p>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Session Active</p>
-            </div>
+        <div className="p-4 border-t border-gray-100 space-y-3 shrink-0">
+          <div className={`bg-gradient-to-br ${profile?.role === 'super_admin' ? 'from-red-800 to-red-950 shadow-red-900/20' : 'from-blue-800 to-blue-950 shadow-blue-900/20'} rounded-xl p-4 text-white shadow-lg`}>
+            <p className="text-xs font-semibold opacity-80 uppercase tracking-wider mb-2">Active Tenant</p>
+            
+            {profile?.role === 'super_admin' ? (
+              <select 
+                value={profile?.branch_id || ''} 
+                onChange={(e) => switchBranch(e.target.value)}
+                className="w-full bg-red-900/50 border border-red-700/50 text-white text-sm rounded p-1.5 focus:outline-none focus:ring-1 focus:ring-red-400"
+              >
+                <option value="">Global View (All)</option>
+                {branches.map(b => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
+                <p className="text-sm font-medium truncate">{profile?.branches?.name || 'Unknown Branch'}</p>
+              </div>
+            )}
+            
+            <p className="text-[10px] mt-2 opacity-60">Role: {(profile?.role || 'User').replace('_', ' ')}</p>
           </div>
+          
           <button 
             onClick={signOut}
-            className="w-full flex items-center justify-center gap-2 px-4 py-4 rounded-2xl text-sm font-black text-red-600 bg-red-50 hover:bg-red-100 transition-all border border-red-100 shadow-sm"
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors border border-red-100"
           >
-            <LogOut size={20} /> TERMINATE SESSION
+            <LogOut size={14} /> Sign Out
           </button>
         </div>
       </div>
 
-      <main className="flex-1 overflow-auto p-8 lg:p-12 relative">
+      <main className="flex-1 overflow-auto p-8 relative">
         {globalError && (
-          <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-red-600 text-white px-6 py-3 rounded-full shadow-lg font-bold text-sm flex items-center gap-2 z-50">
-            <AlertTriangle size={18} />
-            <span>{globalError}</span>
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-600 text-white px-4 py-2 rounded shadow-lg font-medium text-sm flex items-center gap-2 z-50">
+            <AlertTriangle size={16} />
+            {globalError}
           </div>
         )}
         
-        <div className="max-w-7xl mx-auto h-full">
-           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-6">
-             <div>
-                <h1 className="text-4xl font-black text-slate-900 tracking-tighter mb-2">{navigation.find(n => n.id === activeTab)?.name || 'Module'}</h1>
-                <p className="text-slate-500 font-bold uppercase tracking-widest text-xs">Branch: {profile?.branches?.name || 'Central Office'}</p>
-             </div>
-             <div className="flex gap-4 shrink-0">
-                <div className="bg-white px-6 py-3 rounded-2xl border border-slate-200 flex items-center gap-3 shadow-sm">
-                   <div className="h-3 w-3 rounded-full bg-green-500 shadow-sm"></div>
-                   <span className="text-xs font-black text-slate-700 uppercase tracking-widest">Network Stable</span>
-                </div>
-             </div>
-           </div>
-           
-           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out pb-12">
-             {activeTab === 'dashboard' && <DashboardView />}
-             {activeTab === 'calendar' && <CalendarView />}
-             {activeTab === 'teacher-schedule' && <TeacherScheduleView />}
-             {activeTab === 'daily-rooms' && <DailyRoomView />}
-             {activeTab === 'programs' && <ProgramManager />}
-             {activeTab === 'sessions' && <SessionManager />}
-             {activeTab === 'resources' && <ResourceManager />}
-           </div>
+        <div className="max-w-6xl mx-auto h-full">
+           {activeTab === 'dashboard' && <DashboardView />}
+           {activeTab === 'calendar' && <CalendarView />}
+           {activeTab === 'teacher-schedule' && <TeacherScheduleView />}
+           {activeTab === 'daily-rooms' && <DailyRoomView />}
+           {activeTab === 'programs' && <ProgramManager />}
+           {activeTab === 'sessions' && <SessionManager />}
+           {activeTab === 'resources' && <ResourceManager />}
+           {activeTab === 'admin' && profile?.role === 'super_admin' && <SuperAdminDashboard />}
         </div>
       </main>
     </div>
