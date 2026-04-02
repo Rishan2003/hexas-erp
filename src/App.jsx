@@ -1147,9 +1147,17 @@ const ProgramManager = () => {
     setFormData(prev => {
       let newTeachers = prev.assigned_teachers;
       if (newTeachers.includes(teacherId)) newTeachers = newTeachers.filter(id => id !== teacherId);
-      else if (newTeachers.length < 2) newTeachers = [...newTeachers, teacherId];
+      else newTeachers = [...newTeachers, teacherId];
       return { ...prev, assigned_teachers: newTeachers };
     });
+  };
+
+  const handleSelectAllTeachers = () => {
+    if (formData.assigned_teachers.length === teachers.length && teachers.length > 0) {
+      setFormData(prev => ({ ...prev, assigned_teachers: [] }));
+    } else {
+      setFormData(prev => ({ ...prev, assigned_teachers: teachers.map(t => t.id) }));
+    }
   };
 
   const handleEdit = (program) => {
@@ -1312,10 +1320,15 @@ const ProgramManager = () => {
               </div>
 
               <div className="col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Assign Teachers (Max 2)
-                  {['mock_test', 'partial_reading', 'partial_writing', 'partial_speaking'].includes(formData.type) && <span className="text-gray-400 font-normal italic ml-2">- Optional for Assessments</span>}
-                </label>
+                <div className="flex justify-between items-center mb-2">
+                  <label className="block text-sm font-medium text-gray-700">
+                    Assign Personnel
+                    {['mock_test', 'partial_reading', 'partial_writing', 'partial_speaking'].includes(formData.type) && <span className="text-gray-400 font-normal italic ml-2">- Optional for Assessments</span>}
+                  </label>
+                  <button type="button" onClick={handleSelectAllTeachers} className="text-blue-600 text-xs hover:underline font-medium">
+                    {formData.assigned_teachers.length === teachers.length && teachers.length > 0 ? 'Clear All' : 'Select All'}
+                  </button>
+                </div>
                 <div className="grid grid-cols-2 gap-2">
                   {teachers.map(t => (
                     <label key={t.id} className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
@@ -1451,9 +1464,17 @@ const SessionManager = () => {
     setFormData(prev => {
       let newTeachers = prev.assigned_teachers;
       if (newTeachers.includes(teacherId)) newTeachers = newTeachers.filter(id => id !== teacherId);
-      else if (newTeachers.length < 2) newTeachers = [...newTeachers, teacherId];
+      else newTeachers = [...newTeachers, teacherId];
       return { ...prev, assigned_teachers: newTeachers };
     });
+  };
+
+  const handleSelectAllTeachers = () => {
+    if (formData.assigned_teachers.length === teachers.length && teachers.length > 0) {
+      setFormData(prev => ({ ...prev, assigned_teachers: [] }));
+    } else {
+      setFormData(prev => ({ ...prev, assigned_teachers: teachers.map(t => t.id) }));
+    }
   };
 
   const formatTimeForInput = (date) => `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
@@ -1564,7 +1585,12 @@ const SessionManager = () => {
               <input required type="time" value={formData.end_time} onChange={e => setFormData({...formData, end_time: e.target.value})} className="w-full p-2 border rounded-lg" />
             </div>
             <div className="col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Assign Teachers (Max 2)</label>
+              <div className="flex justify-between items-center mb-2">
+                <label className="block text-sm font-medium text-gray-700">Assign Personnel</label>
+                <button type="button" onClick={handleSelectAllTeachers} className="text-blue-600 text-xs hover:underline font-medium">
+                  {formData.assigned_teachers.length === teachers.length && teachers.length > 0 ? 'Clear All' : 'Select All'}
+                </button>
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 {teachers.map(t => (
                   <label key={t.id} className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
