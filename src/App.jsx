@@ -862,6 +862,48 @@ const DailyRoomView = () => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const hours = Array.from({ length: 14 }, (_, i) => i + 8); 
 
+  const resizeRef = useRef({ index: -1, startX: 0, startWidth: 0 });
+  const [columnWidths, setColumnWidths] = useState([]);
+
+  useEffect(() => {
+    setColumnWidths(Array(classrooms.length).fill(250));
+  }, [classrooms.length]);
+
+  const handleMouseMove = useCallback((e) => {
+    if (resizeRef.current.index === -1) return;
+    const { index, startX, startWidth } = resizeRef.current;
+    const diff = e.clientX - startX;
+    const newWidth = Math.max(150, startWidth + diff);
+    setColumnWidths(prev => {
+      const next = [...prev];
+      next[index] = newWidth;
+      return next;
+    });
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    resizeRef.current.index = -1;
+    document.body.style.cursor = '';
+    window.removeEventListener('mousemove', handleMouseMove);
+    window.removeEventListener('mouseup', handleMouseUp);
+  }, [handleMouseMove]);
+
+  const handleMouseDown = (index, e) => {
+    e.preventDefault();
+    resizeRef.current = { index, startX: e.clientX, startWidth: columnWidths[index] };
+    document.body.style.cursor = 'col-resize';
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  useEffect(() => {
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+    };
+  }, [handleMouseMove, handleMouseUp]);
+
   const handlePrevDay = () => { const d = new Date(currentDate); d.setDate(d.getDate() - 1); setCurrentDate(d); };
   const handleNextDay = () => { const d = new Date(currentDate); d.setDate(d.getDate() + 1); setCurrentDate(d); };
 
@@ -910,12 +952,16 @@ const DailyRoomView = () => {
             </div>
           ))}
         </div>
-        <div className="flex-1 grid min-w-[800px] relative" style={{ gridTemplateColumns: `repeat(${classrooms.length}, minmax(0, 1fr))` }}>
-          {classrooms.map((classroom) => (
+        <div className="flex-1 grid min-w-[800px] relative" style={{ gridTemplateColumns: columnWidths.length === classrooms.length ? columnWidths.map(w => w + 'px').join(' ') : `repeat(${classrooms.length}, minmax(0, 1fr))` }}>
+          {classrooms.map((classroom, i) => (
             <div key={classroom.id} className="border-r relative">
-              <div className="h-10 border-b flex flex-col items-center justify-center bg-gray-50 sticky top-0 z-10">
+              <div className="h-10 border-b flex flex-col items-center justify-center bg-gray-50 sticky top-0 z-10 relative">
                 <span className="text-sm font-bold text-gray-900 truncate px-2">{classroom.name}</span>
                 <span className="text-xs font-semibold text-gray-500">Cap: {classroom.capacity}</span>
+                <div 
+                  className="absolute right-0 top-0 w-2 h-full cursor-col-resize hover:bg-blue-500 z-20 transition-colors"
+                  onMouseDown={(e) => handleMouseDown(i, e)}
+                />
               </div>
               <div className="relative" style={{ height: `${hours.length * 4}rem` }}>
                 {hours.map(hour => <div key={hour} className="h-16 border-b border-gray-100"></div>)}
@@ -997,6 +1043,49 @@ const TeacherScheduleView = () => {
     return { weekStart: range.start, weekEnd: range.end, weekDays: days, weekSessions: filteredSessions };
   }, [currentDate, sessions, selectedTeacherId, mode]);
 
+  const currentCols = mode === 'daily' ? teachers.length : weekDays.length;
+  const resizeRef = useRef({ index: -1, startX: 0, startWidth: 0 });
+  const [columnWidths, setColumnWidths] = useState([]);
+
+  useEffect(() => {
+    setColumnWidths(Array(currentCols).fill(250));
+  }, [currentCols, mode]);
+
+  const handleMouseMove = useCallback((e) => {
+    if (resizeRef.current.index === -1) return;
+    const { index, startX, startWidth } = resizeRef.current;
+    const diff = e.clientX - startX;
+    const newWidth = Math.max(150, startWidth + diff);
+    setColumnWidths(prev => {
+      const next = [...prev];
+      next[index] = newWidth;
+      return next;
+    });
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    resizeRef.current.index = -1;
+    document.body.style.cursor = '';
+    window.removeEventListener('mousemove', handleMouseMove);
+    window.removeEventListener('mouseup', handleMouseUp);
+  }, [handleMouseMove]);
+
+  const handleMouseDown = (index, e) => {
+    e.preventDefault();
+    resizeRef.current = { index, startX: e.clientX, startWidth: columnWidths[index] };
+    document.body.style.cursor = 'col-resize';
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  useEffect(() => {
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+    };
+  }, [handleMouseMove, handleMouseUp]);
+
   return (
     <div className="h-full flex flex-col bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
       <div className="p-4 border-b flex justify-between items-center bg-gray-50 flex-wrap gap-4">
@@ -1032,11 +1121,15 @@ const TeacherScheduleView = () => {
           ))}
         </div>
         {mode === 'daily' ? (
-          <div className="flex-1 grid min-w-[800px] relative" style={{ gridTemplateColumns: `repeat(${teachers.length}, minmax(0, 1fr))` }}>
-            {teachers.map((teacher) => (
+          <div className="flex-1 grid min-w-[800px] relative" style={{ gridTemplateColumns: columnWidths.length === teachers.length ? columnWidths.map(w => w + 'px').join(' ') : `repeat(${teachers.length}, minmax(0, 1fr))` }}>
+            {teachers.map((teacher, i) => (
               <div key={teacher.id} className="border-r relative">
-                <div className="h-10 border-b flex items-center justify-center bg-gray-50 sticky top-0 z-10 px-2">
+                <div className="h-10 border-b flex items-center justify-center bg-gray-50 sticky top-0 z-10 px-2 relative">
                   <span className="text-sm font-bold text-gray-900 truncate text-center" title={teacher.name}>{teacher.name}</span>
+                  <div 
+                    className="absolute right-0 top-0 w-2 h-full cursor-col-resize hover:bg-blue-500 z-20 transition-colors"
+                    onMouseDown={(e) => handleMouseDown(i, e)}
+                  />
                 </div>
                 <div className="relative" style={{ height: `${hours.length * 4}rem` }}>
                   {hours.map(hour => <div key={hour} className="h-16 border-b border-gray-100"></div>)}
@@ -1061,12 +1154,16 @@ const TeacherScheduleView = () => {
             ))}
           </div>
         ) : (
-          <div className="flex-1 grid grid-cols-7 min-w-[800px] relative">
+          <div className="flex-1 grid min-w-[800px] relative" style={{ gridTemplateColumns: columnWidths.length === weekDays.length ? columnWidths.map(w => w + 'px').join(' ') : `repeat(${weekDays.length}, minmax(0, 1fr))` }}>
             {weekDays.map((day, i) => (
               <div key={i} className="border-r relative">
-                <div className="h-10 border-b flex flex-col items-center justify-center bg-gray-50 sticky top-0 z-10">
+                <div className="h-10 border-b flex flex-col items-center justify-center bg-gray-50 sticky top-0 z-10 relative">
                   <span className="text-xs font-semibold text-gray-500 uppercase">{day.toLocaleDateString('en-US', { weekday: 'short' })}</span>
                   <span className={`text-sm font-bold ${day.toDateString() === new Date().toDateString() ? 'text-blue-600' : 'text-gray-900'}`}>{day.getDate()}</span>
+                  <div 
+                    className="absolute right-0 top-0 w-2 h-full cursor-col-resize hover:bg-blue-500 z-20 transition-colors"
+                    onMouseDown={(e) => handleMouseDown(i, e)}
+                  />
                 </div>
                 <div className="relative" style={{ height: `${hours.length * 4}rem` }}>
                   {hours.map(hour => <div key={hour} className="h-16 border-b border-gray-100"></div>)}
