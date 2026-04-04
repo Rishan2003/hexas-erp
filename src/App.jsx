@@ -56,7 +56,7 @@ const apiService = {
   },
 
   async fetchBranches(supabaseClient) {
-    const { data, error } = await supabaseClient.from('branches').select('*').order('created_at', { ascending: true });
+    const { data, error } = await supabaseClient.from('branches').select('*').order('created_at', { ascending: true }).limit(10000);
     if (error) throw new Error(error.message);
     return data || [];
   },
@@ -67,26 +67,60 @@ const apiService = {
     return data;
   },
 
-  async fetchAll(supabaseClient, branchId) {
-    let tQuery = supabaseClient.from('teachers').select('*');
-    let cQuery = supabaseClient.from('classrooms').select('*');
-    let pQuery = supabaseClient.from('programs').select('*');
-    let sQuery = supabaseClient.from('sessions').select('*');
+  // FIX: Pagination helper to bypass Supabase's hard 1000 row API limit
+  async fetchAllSessions(supabaseClient, branchId) {
+    let allSessions = [];
+    let from = 0;
+    const step = 1000;
+    
+    while (true) {
+      let sQuery = supabaseClient.from('sessions').select('*').range(from, from + step - 1);
+      if (branchId) {
+        sQuery = sQuery.eq('branch_id', branchId);
+      }
+      
+      const { data, error } = await sQuery;
+      if (error) throw new Error(error.message);
+      
+      if (data) allSessions = allSessions.concat(data);
+      
+      // If we got fewer rows than the step size, we've hit the end of the database table
+      if (!data || data.length < step) {
+        break; 
+      }
+      from += step;
+    }
+    
+    return allSessions;
+  },
 
-    // Dynamically filter by branch if an ID is provided (Super Admins can pass null/undefined to see all)
+  async fetchAll(supabaseClient, branchId) {
+    let tQuery = supabaseClient.from('teachers').select('*').limit(10000);
+    let cQuery = supabaseClient.from('classrooms').select('*').limit(10000);
+    let pQuery = supabaseClient.from('programs').select('*').limit(10000);
+
+    // Dynamically filter by branch if an ID is provided
     if (branchId) {
       tQuery = tQuery.eq('branch_id', branchId);
       cQuery = cQuery.eq('branch_id', branchId);
       pQuery = pQuery.eq('branch_id', branchId);
-      sQuery = sQuery.eq('branch_id', branchId);
     }
 
-    const [t, c, p, s] = await Promise.all([tQuery, cQuery, pQuery, sQuery]);
+    const [t, c, p] = await Promise.all([tQuery, cQuery, pQuery]);
+    
     if (t.error) throw new Error(t.error.message);
     if (c.error) throw new Error(c.error.message);
     if (p.error) throw new Error(p.error.message);
-    if (s.error) throw new Error(s.error.message);
-    return { teachers: t.data || [], classrooms: c.data || [], programs: p.data || [], sessions: s.data || [] };
+
+    // Use our new paginated fetcher for sessions
+    const sessions = await this.fetchAllSessions(supabaseClient, branchId);
+
+    return { 
+      teachers: t.data || [], 
+      classrooms: c.data || [], 
+      programs: p.data || [], 
+      sessions: sessions 
+    };
   },
 
   async createProgram(supabaseClient, program, sessions) {
@@ -1429,7 +1463,7 @@ const ProgramManager = () => {
                 <div className="grid grid-cols-2 gap-2">
                   {teachers.map(t => (
                     <label key={t.id} className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
-                      <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500 mr-3 h-4 w-4" checked={formData.assigned_teachers.includes(t.id)} onChange={() => {}} onClick={(e) => { e.stopPropagation(); toggleTeacher(t.id); }} />
+                      <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500 mr-3 h-4 w-4" checked={formData.assigned_teachers.includes(t.id)} onChange={() => toggleTeacher(t.id)} />
                       <span className="text-sm font-medium text-gray-900">{t.name}</span>
                     </label>
                   ))}
@@ -1691,7 +1725,7 @@ const SessionManager = () => {
               <div className="grid grid-cols-2 gap-2">
                 {teachers.map(t => (
                   <label key={t.id} className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
-                    <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500 mr-3 h-4 w-4" checked={formData.assigned_teachers.includes(t.id)} onChange={() => {}} onClick={(e) => { e.stopPropagation(); toggleTeacher(t.id); }} />
+                    <input type="checkbox" className="rounded text-blue-600 focus:ring-blue-500 mr-3 h-4 w-4" checked={formData.assigned_teachers.includes(t.id)} onChange={() => toggleTeacher(t.id)} />
                     <span className="text-sm font-medium text-gray-900">{t.name}</span>
                   </label>
                 ))}
