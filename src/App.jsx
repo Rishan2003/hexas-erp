@@ -738,7 +738,7 @@ const SuperAdminDashboard = () => {
 };
 
 const DashboardView = () => {
-  const { sessions, teachers } = useContext(StoreContext);
+  const { sessions, teachers, classrooms } = useContext(StoreContext);
   const todaysSessions = useMemo(() => {
     const today = new Date(); today.setHours(0,0,0,0);
     const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
@@ -781,9 +781,21 @@ const DashboardView = () => {
                 <li key={session.id} className="p-4 hover:bg-gray-50 transition-colors flex items-center justify-between">
                   <div>
                     <h4 className="font-medium text-gray-900">{session.title}</h4>
-                    <p className="text-sm text-gray-500 mt-1 flex items-center gap-2">
-                      <Clock size={14} /> {formatTime(session.start_time)} - {formatTime(session.end_time)}
-                    </p>
+                    <div className="text-sm text-gray-500 mt-1.5 flex items-center gap-4 flex-wrap">
+                      <span className="flex items-center gap-1.5">
+                        <Clock size={14} /> {formatTime(session.start_time)} - {formatTime(session.end_time)}
+                      </span>
+                      {session.assigned_classroom && (
+                        <span className="flex items-center gap-1.5">
+                          <MapPin size={14} /> {classrooms.find(c => c.id === session.assigned_classroom)?.name || 'TBA'}
+                        </span>
+                      )}
+                      {session.assigned_teachers && session.assigned_teachers.length > 0 && (
+                        <span className="flex items-center gap-1.5">
+                          <Users size={14} /> {(session.assigned_teachers || []).map(tid => teachers.find(t => t.id === tid)?.name.split(' ')[0]).join(', ')}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <Badge color={getSessionColor(session.type)}>{(session.type || '').replace(/_/g, ' ').toUpperCase()}</Badge>
                 </li>
